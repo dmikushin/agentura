@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Syntax check all Python files being committed
+echo "[pre-commit] Checking Python syntax..."
+git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | while read f; do
+    python3 -c "import ast; ast.parse(open('$f').read())" || exit 1
+done
+
+# E2E test: requires agentura server running
+echo "[pre-commit] Running e2e tests..."
+# Load .env for AGENTURA_URL
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | grep -v '^UID=' | grep -v '^GID=' | xargs)
+fi
+docker compose up -d --wait 2>/dev/null
+sleep 1
+python3 tests/test_read_stream.py
+python3 tests/test_chat.py
+python3 tests/test_remote.py
+docker compose down 2>/dev/null

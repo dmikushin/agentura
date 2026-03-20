@@ -21,9 +21,8 @@ import os
 import re
 from pathlib import Path
 
-# --- State files ---
-STATE_DIR = Path("/tmp/ai_chat")
-STATE_DIR.mkdir(parents=True, exist_ok=True)
+# --- State files (created lazily, only needed by stream_read) ---
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "ai_chat"
 
 
 # =============================================================================
@@ -105,6 +104,7 @@ def stream_read(pane_id: str, lines: int = 200) -> dict:
     Returns:
         dict with 'new_content' (new lines as string) and 'total_lines'
     """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     state_file = STATE_DIR / f".stream_{pane_id.replace('%', 'p')}"
 
     # Load previous state

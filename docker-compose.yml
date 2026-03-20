@@ -1,0 +1,34 @@
+services:
+  agentura-server:
+    build: .
+    container_name: agentura-server
+    restart: unless-stopped
+    pid: host                          # see host PIDs for liveness checks
+    user: "${UID:-1000}:${GID:-1000}"  # run as host user for file permissions
+    ports:
+      - "${AGENTURA_PORT:-7850}:${AGENTURA_PORT:-7850}"
+    volumes:
+      - streams:/data                   # named volume for stream files
+      - ${TMUX_SOCKET_PATH}:${TMUX_SOCKET_PATH}:ro  # host tmux socket
+      - ./secrets/authorized_keys:/app/secrets/authorized_keys:ro
+    environment:
+      - TMUX_TMPDIR=/tmp
+      - AUTHORIZED_KEYS=/app/secrets/authorized_keys
+      - AGENTURA_PORT=${AGENTURA_PORT:-7850}
+
+  agentura-tunnel:
+    image: jnovack/autossh
+    container_name: agentura-tunnel
+    environment:
+      - SSH_REMOTE_USER=${GATEWAY_USER}
+      - SSH_REMOTE_HOST=${GATEWAY_HOST}
+      - SSH_REMOTE_PORT=${GATEWAY_PORT:-22}
+      - SSH_TARGET_HOST=agentura-server
+      - SSH_TARGET_PORT=${AGENTURA_PORT:-7850}
+      - SSH_TUNNEL_PORT=${TUNNEL_PORT}
+    restart: always
+    volumes:
+      - ${TUNNEL_KEY}:/id_rsa:ro
+
+volumes:
+  streams:

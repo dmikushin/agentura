@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentura"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp",
+    "cryptography",
+]
+
+[tool.setuptools]
+py-modules = ["agent", "tmux_tools", "server", "mcp_server", "mcp_backend", "auth", "sidecar"]
+
+[project.scripts]
+agent-run = "agent:main"
+agentura-mcp = "mcp_server:mcp.run"

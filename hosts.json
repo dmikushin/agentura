@@ -1,0 +1,7 @@
+{
+  "t580": {
+    "tags": ["dev"],
+    "cpu_count": 8,
+    "notes": "ThinkPad T580 dev box"
+  }
+}
