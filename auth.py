@@ -192,8 +192,8 @@ class AuthSessionStore:
     def __init__(self):
         self._nonces = {}
         self._sessions = {}
-        self._agent_tokens = {}  # {token: {"agent_id", "user", "expires"}}
-        self._delegation_tokens = {}  # {token: {"creator", "target_host", "user", "expires"}}
+        self._agent_tokens = {}  # {token: {"agent_id", "expires"}}
+        self._delegation_tokens = {}  # {token: {"creator", "target_host", "expires"}}
 
     def create_nonce(self) -> str:
         self._cleanup_nonces()
@@ -209,16 +209,15 @@ class AuthSessionStore:
             return False
         return (time.time() - ts) < self.NONCE_TTL
 
-    def create_token(self, user: str) -> tuple:
+    def create_token(self) -> tuple:
         self._cleanup_sessions()
         token = secrets.token_hex(32)
         self._sessions[token] = {
-            "user": user,
             "expires": time.time() + self.TOKEN_TTL,
         }
         return token, self.TOKEN_TTL
 
-    def validate_token(self, token: str) -> str | None:
+    def validate_token(self, token: str) -> bool | None:
         self._cleanup_sessions()
         session = self._sessions.get(token)
         if session is None:
@@ -226,7 +225,7 @@ class AuthSessionStore:
         if time.time() > session["expires"]:
             del self._sessions[token]
             return None
-        return session["user"]
+        return True
 
     def _cleanup_nonces(self):
         now = time.time()
@@ -237,13 +236,12 @@ class AuthSessionStore:
 
     # --- Agent tokens ---
 
-    def create_agent_token(self, agent_id: str, user: str) -> tuple[str, int]:
-        """Create a token bound to (agent_id, user). Returns (token, ttl)."""
+    def create_agent_token(self, agent_id: str) -> tuple[str, int]:
+        """Create a token bound to agent_id. Returns (token, ttl)."""
         self._cleanup_agent_tokens()
         token = secrets.token_hex(32)
         self._agent_tokens[token] = {
             "agent_id": agent_id,
-            "user": user,
             "expires": time.time() + self.AGENT_TOKEN_TTL,
         }
         return token, self.AGENT_TOKEN_TTL
@@ -259,10 +257,10 @@ class AuthSessionStore:
             return None
         return entry["agent_id"]
 
-    def refresh_agent_token(self, agent_id: str, user: str) -> tuple[str, int]:
+    def refresh_agent_token(self, agent_id: str) -> tuple[str, int]:
         """Issue an additional agent token (existing tokens remain valid)."""
         self._cleanup_agent_tokens()
-        return self.create_agent_token(agent_id, user)
+        return self.create_agent_token(agent_id)
 
     def _cleanup_agent_tokens(self):
         now = time.time()
@@ -280,13 +278,12 @@ class AuthSessionStore:
 
     # --- Delegation tokens ---
 
-    def create_delegation_token(self, creator: str, target_host: str, user: str) -> tuple[str, int]:
+    def create_delegation_token(self, creator: str, target_host: str) -> tuple[str, int]:
         """Create a delegation token for a remote agent.
 
         Args:
             creator: agent_id of the creating agent
             target_host: hostname where the remote agent will run
-            user: authenticated user
 
         Returns:
             (token, ttl) tuple
@@ -296,7 +293,6 @@ class AuthSessionStore:
         self._delegation_tokens[token] = {
             "creator": creator,
             "target_host": target_host,
-            "user": user,
             "expires": time.time() + self.DELEGATION_TOKEN_TTL,
         }
         return token, self.DELEGATION_TOKEN_TTL
@@ -321,7 +317,7 @@ class AuthSessionStore:
         if time.time() > entry["expires"]:
             return None
         return self.create_delegation_token(
-            entry["creator"], entry["target_host"], entry["user"])
+            entry["creator"], entry["target_host"])
 
     def _cleanup_delegation_tokens(self):
         now = time.time()

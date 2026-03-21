@@ -549,23 +549,11 @@ async def _notify_agent(registry: AgentRegistry, agent_id: str, message: str):
     })
 
 
-def _extract_user_from_token(request: web.Request) -> str:
-    """Extract user from bearer token in request."""
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return "unknown"
-    token = auth_header[7:]
-    auth_store: AuthSessionStore = request.app["auth_store"]
-    user = auth_store.validate_token(token)
-    return user or "unknown"
-
-
 async def handle_register(request: web.Request) -> web.Response:
     registry: AgentRegistry = request.app["registry"]
     auth_store: AuthSessionStore = request.app["auth_store"]
     try:
         body = await request.json()
-        user = _extract_user_from_token(request)
         entry = registry.register(
             name=body["agent_name"],
             pane_id=body["pane_id"],
@@ -574,9 +562,8 @@ async def handle_register(request: web.Request) -> web.Response:
             hostname=body.get("hostname", ""),
             cwd=body.get("cwd", ""),
         )
-        # Create agent token bound to (agent_id, user)
-        agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id, user)
-        print(f"[agentura] Registered '{entry.agent_id}' ({entry.name}) pane={entry.pane_id} user={user}")
+        agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
+        print(f"[agentura] Registered '{entry.agent_id}' ({entry.name}) pane={entry.pane_id}")
         return web.json_response({
             "status": "ok",
             "stream_file": str(entry.stream_file),
@@ -664,10 +651,10 @@ async def handle_auth_verify(request: web.Request) -> web.Response:
     if not verifier.verify(key_blob, nonce_bytes, body["sig_type"], sig_data):
         return web.json_response({"status": "error", "error": "signature verification failed"}, status=401)
 
-    user = verifier.get_comment(key_blob) or "unknown"
-    token, expires_in = auth_store.create_token(user)
-    print(f"[agentura] Authenticated user: {user}")
-    return web.json_response({"token": token, "expires_in": expires_in, "user": user})
+    token, expires_in = auth_store.create_token()
+    comment = verifier.get_comment(key_blob)
+    print(f"[agentura] Authenticated key: {comment}")
+    return web.json_response({"token": token, "expires_in": expires_in})
 
 
 # --- Auth middleware ---
@@ -693,8 +680,8 @@ async def auth_middleware(request: web.Request, handler):
             request["delegation_info"] = delegation_info
             return await handler(request)
         # Also accept regular bearer token (for queue-message from local agents)
-        user = auth_store.validate_token(token)
-        if user is not None:
+        valid = auth_store.validate_token(token)
+        if valid is not None:
             return await handler(request)
         # Also accept agent tokens
         agent_id = auth_store.validate_agent_token(token)
@@ -709,8 +696,8 @@ async def auth_middleware(request: web.Request, handler):
             {"status": "error", "error": "missing Authorization header"}, status=401)
 
     token = auth_header[7:]
-    user = auth_store.validate_token(token)
-    if user is None:
+    valid = auth_store.validate_token(token)
+    if valid is None:
         return web.json_response(
             {"status": "error", "error": "invalid or expired token"}, status=401)
 
@@ -1092,14 +1079,13 @@ async def handle_team_force_succession(request: web.Request) -> web.Response:
 
 async def handle_agent_token_refresh(request: web.Request) -> web.Response:
     auth_store: AuthSessionStore = request.app["auth_store"]
-    user = _extract_user_from_token(request)
     try:
         body = await request.json()
         agent_id = body["agent_id"]
     except (KeyError, json.JSONDecodeError) as e:
         return web.json_response({"status": "error", "error": str(e)}, status=400)
 
-    token, ttl = auth_store.refresh_agent_token(agent_id, user)
+    token, ttl = auth_store.refresh_agent_token(agent_id)
     return web.json_response({
         "status": "ok",
         "agent_token": token,
@@ -1112,7 +1098,6 @@ async def handle_agent_token_refresh(request: web.Request) -> web.Response:
 async def handle_delegate(request: web.Request) -> web.Response:
     """Create a delegation token for a remote agent. Requires Bearer auth."""
     auth_store: AuthSessionStore = request.app["auth_store"]
-    user = _extract_user_from_token(request)
     try:
         body = await request.json()
         target_host = body["target_host"]
@@ -1126,7 +1111,7 @@ async def handle_delegate(request: web.Request) -> web.Response:
         return web.json_response(
             {"status": "error", "error": "invalid or expired agent_token"}, status=401)
 
-    token, ttl = auth_store.create_delegation_token(creator, target_host, user)
+    token, ttl = auth_store.create_delegation_token(creator, target_host)
     print(f"[agentura] Delegation token created by {creator} for host {target_host}")
     return web.json_response({
         "status": "ok",
@@ -1161,8 +1146,6 @@ async def handle_sidecar_register(request: web.Request) -> web.Response:
     """Register an agent via sidecar protocol."""
     registry: AgentRegistry = request.app["registry"]
     auth_store: AuthSessionStore = request.app["auth_store"]
-    delegation_info = request.get("delegation_info")
-    user = delegation_info.get("user") if delegation_info else _extract_user_from_token(request)
     try:
         body = await request.json()
         entry = registry.register(
@@ -1173,8 +1156,8 @@ async def handle_sidecar_register(request: web.Request) -> web.Response:
             hostname=body.get("hostname", ""),
             cwd=body.get("cwd", ""),
         )
-        agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id, user)
-        print(f"[agentura] Agent registered: '{entry.agent_id}' ({entry.name}) user={user}")
+        agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
+        print(f"[agentura] Agent registered: '{entry.agent_id}' ({entry.name})")
         return web.json_response({
             "status": "ok",
             "agent_id": entry.agent_id,
