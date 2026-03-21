@@ -15,9 +15,17 @@ echo "[pre-commit] Running e2e tests..."
 if [ -f .env ]; then
     export $(grep -v '^#' .env | grep -v '^UID=' | grep -v '^GID=' | xargs)
 fi
-docker compose up -d --wait 2>/dev/null
-sleep 1
+# Start server if not already running; remember whether we started it
+STARTED_BY_HOOK=0
+if ! docker compose ps --status running 2>/dev/null | grep -q agentura-server; then
+    docker compose up -d --wait 2>/dev/null
+    sleep 1
+    STARTED_BY_HOOK=1
+fi
 python3 tests/test_read_stream.py
 python3 tests/test_chat.py
 python3 tests/test_remote.py
-docker compose down 2>/dev/null
+# Only stop if we started it
+if [ "$STARTED_BY_HOOK" = "1" ]; then
+    docker compose down 2>/dev/null
+fi
