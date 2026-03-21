@@ -1246,7 +1246,7 @@ async def handle_sidecar_queue_message(request: web.Request) -> web.Response:
         body = await request.json()
         agent_id = body["agent_id"]
         text = body["text"]
-        sender = body.get("sender", "unknown")
+        sender = body["sender"]
     except (KeyError, json.JSONDecodeError) as e:
         return web.json_response({"status": "error", "error": str(e)}, status=400)
 
