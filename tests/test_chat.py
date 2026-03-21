@@ -170,11 +170,13 @@ def main():
 
         # --- Test: send_message basic ---
         print("\n[test] Basic send_message...")
+        os.environ["AGENT_ID"] = agent_a
         from mcp_backend import send_message
+        import mcp_backend
+        mcp_backend._agent_id = agent_a
         result = send_message(
             target_agent_id=agent_b,
             message="Hello from A",
-            sender_agent_id=agent_a,
         )
         check("send_message returns success", "sent" in result, result)
 
@@ -193,7 +195,6 @@ def main():
         result = send_message(
             target_agent_id=agent_b,
             message="Need status update",
-            sender_agent_id=agent_a,
             rsvp=True,
         )
         check("rsvp send returns success", "RSVP" in result, result)
@@ -208,20 +209,21 @@ def main():
               f"/rsvp {agent_a}" in pane_content,
               pane_content[-300:])
 
-        # --- Test: sender_agent_id required ---
+        # --- Test: AGENT_ID required ---
         print("\n[test] Validation...")
+        saved_id = mcp_backend._agent_id
+        mcp_backend._agent_id = None
         result = send_message(
             target_agent_id=agent_b,
             message="no sender",
-            sender_agent_id="",
         )
-        check("empty sender rejected", "Error" in result, result)
+        check("missing AGENT_ID rejected", "Error" in result and "AGENT_ID" in result, result)
+        mcp_backend._agent_id = saved_id
 
         # --- Test: unknown target ---
         result = send_message(
             target_agent_id="nobody@nowhere:0",
             message="hello",
-            sender_agent_id=agent_a,
         )
         check("unknown target rejected", "not found" in result, result)
 
@@ -269,7 +271,6 @@ def main():
             result = send_message(
                 target_agent_id=gemini_id,
                 message="Great job! Well done!",
-                sender_agent_id=agent_a,
             )
             check("send to gemini succeeds", "sent" in result, result)
 

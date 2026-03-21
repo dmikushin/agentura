@@ -58,13 +58,13 @@ def list_hosts() -> str:
 
 @mcp.tool()
 def create_agent(hostname: str, cwd: str, agent_type: str,
-                 blocking: bool = True, team: str = "",
-                 sender_agent_id: str = "") -> str:
+                 blocking: bool = True, team: str = "") -> str:
     """Create a new AI agent in a tmux window on a local or remote host.
 
     For remote hosts, the agent is launched via SSH with a delegation token.
     A sidecar process on the remote host handles stream capture, heartbeats,
     and message delivery back to the central server.
+    Your identity is taken automatically from AGENT_ID (set by agent-run).
 
     Args:
         hostname: target host (local hostname or a remote host from list_hosts)
@@ -72,15 +72,12 @@ def create_agent(hostname: str, cwd: str, agent_type: str,
         agent_type: "claude" or "gemini"
         blocking: if True, wait for the agent to register and return its info
         team: team name to assign the new agent to (optional)
-        sender_agent_id: your own agent_id — if provided and you have no teams,
-                         a new team is auto-created for both of you
 
     Returns:
         Agent info with team assignment.
     """
     return _call("create_agent", hostname=hostname, cwd=cwd,
-                 agent_type=agent_type, blocking=blocking,
-                 team=team, sender_agent_id=sender_agent_id)
+                 agent_type=agent_type, blocking=blocking, team=team)
 
 
 @mcp.tool()
@@ -101,24 +98,22 @@ def read_stream(agent_id: str) -> str:
 
 @mcp.tool()
 def send_message(target_agent_id: str, message: str,
-                 sender_agent_id: str = "", rsvp: bool = False) -> str:
-    """Send a message to another agent.
+                 rsvp: bool = False) -> str:
+    """Send a message to another agent via the server's message queue.
 
-    For local agents, delivered via tmux send-keys into the terminal input.
-    For remote agents, delivered via the server's message queue and polled
-    by the remote sidecar process.
+    The agent's sidecar delivers it to the tmux pane via send-keys.
+    Your identity is taken automatically from AGENT_ID (set by agent-run).
 
     Args:
         target_agent_id: recipient agent (hostname@cwd:PID from list_agents)
         message: text to send
-        sender_agent_id: your own agent_id (always required, prepended as [id] prefix)
         rsvp: if True, append /rsvp command requesting immediate reply
 
     Returns:
         Delivery confirmation or error.
     """
     return _call("send_message", target_agent_id=target_agent_id,
-                 message=message, sender_agent_id=sender_agent_id, rsvp=rsvp)
+                 message=message, rsvp=rsvp)
 
 
 @mcp.tool()

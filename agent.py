@@ -169,6 +169,9 @@ def main():
                     stream_file = body.get("stream_file", "?")
                     print(f"[agent-run] Registered as '{agent_name}' (pane {pane_id}), "
                           f"stream: {stream_file}", file=sys.stderr)
+                    os.environ["AGENT_ID"] = agent_id
+                    print(f"[agent-run] Agent ID saved to AGENT_ID env: {agent_id}",
+                          file=sys.stderr)
                     agent_token = body.get("agent_token")
                     if agent_token:
                         os.environ["AGENT_TOKEN"] = agent_token

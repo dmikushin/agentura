@@ -33,20 +33,24 @@ AGENT_PRESETS = {"claude", "gemini"}
 _cursors: dict[str, int] = {}
 _auth_token: str | None = None
 _agent_token: str | None = os.environ.get("AGENT_TOKEN")
+_agent_id: str | None = os.environ.get("AGENT_ID")
 
 
 # --- HTTP helpers ---
 
 def _refresh_token():
-    global _auth_token, _agent_token
+    global _auth_token, _agent_token, _agent_id
     try:
         _auth_token = authenticate(MONITOR_URL)
     except Exception:
         _auth_token = None
-    # Also refresh agent_token from env (agent.py may have set it)
+    # Also refresh agent_token and agent_id from env (agent.py may have set them)
     env_token = os.environ.get("AGENT_TOKEN")
     if env_token:
         _agent_token = env_token
+    env_id = os.environ.get("AGENT_ID")
+    if env_id:
+        _agent_id = env_id
 
 
 def _refresh_agent_token(agent_id: str):
@@ -175,14 +179,15 @@ def list_hosts() -> str:
 
 
 def create_agent(hostname: str, cwd: str, agent_type: str,
-                 blocking: bool = True, team: str = "",
-                 sender_agent_id: str = "") -> str:
+                 blocking: bool = True, team: str = "") -> str:
     """Create a new AI agent in a tmux window (local or remote).
 
-    If sender_agent_id is provided and the sender has no teams,
-    a new team is auto-created for both agents.
+    If the sender has no teams, a new team is auto-created for both agents.
     If team is specified, the new agent joins that team.
+    Sender identity is always taken from AGENT_ID env (set by agent-run).
     """
+    sender_agent_id = _agent_id or ""
+
     if agent_type not in AGENT_PRESETS:
         types = ", ".join(AGENT_PRESETS)
         return f"Error: unknown agent type '{agent_type}', expected one of: {types}"
@@ -369,9 +374,8 @@ def _create_remote_agent(hostname: str, host_info: dict, cwd: str,
             try:
                 data = _get("/agents")
                 for a in data.get("agents", []):
-                    if (a.get("hostname") == hostname and
-                            a.get("remote", False)):
-                        # Match by hostname + recent registration
+                    if a.get("hostname") == hostname:
+                        # Match by hostname
                         new_agent_id = a["agent_id"]
                         break
             except urllib.error.URLError:
@@ -491,15 +495,18 @@ def read_stream(agent_id: str) -> str:
 
 
 def send_message(target_agent_id: str, message: str,
-                 sender_agent_id: str = "", rsvp: bool = False) -> str:
-    """Send a message to another agent by typing into their tmux pane input.
-    For remote agents, messages are delivered via the server's message queue."""
+                 rsvp: bool = False) -> str:
+    """Send a message to another agent via the server's message queue.
+    The agent's sidecar delivers it to the tmux pane.
+    Sender identity is always taken from AGENT_ID env (set by agent-run)."""
+    if not _agent_id:
+        return "Error: AGENT_ID env not set (not running under agent-run?)"
+
     agent, err = _resolve_agent(target_agent_id)
     if err:
         return f"Error: {err}"
 
-    if not sender_agent_id:
-        return "Error: sender_agent_id is required (your own agent_id)"
+    sender_agent_id = _agent_id
 
     full_message = f"[{sender_agent_id}] {message}"
 
@@ -507,6 +514,9 @@ def send_message(target_agent_id: str, message: str,
         full_message = full_message.replace("!", ".")
 
     # All agents use message queue → sidecar injects via tmux send-keys
+    if rsvp:
+        full_message += f"\n/rsvp {sender_agent_id}"
+
     try:
         resp = _post("/sidecar/queue-message", {
             "agent_id": target_agent_id,
@@ -515,12 +525,6 @@ def send_message(target_agent_id: str, message: str,
         })
         if resp.get("status") != "ok":
             return f"Error queuing message: {resp.get('error', 'unknown')}"
-        if rsvp:
-            _post("/sidecar/queue-message", {
-                "agent_id": target_agent_id,
-                "text": f"/rsvp {sender_agent_id}",
-                "sender": sender_agent_id,
-            })
     except Exception as e:
         return f"Error sending message: {e}"
 
@@ -534,31 +538,22 @@ def interrupt_agent(target_agent_id: str) -> str:
     """Interrupt an agent by sending Escape to its tmux pane.
 
     Cancels the agent's current operation (e.g. a hanging MCP tool call).
-    For remote agents, the Escape is queued and delivered by the sidecar.
+    The Escape is queued and delivered by the agent's sidecar.
     """
     agent, err = _resolve_agent(target_agent_id)
     if err:
         return f"Error: {err}"
 
-    if agent.get("remote"):
-        try:
-            resp = _post("/sidecar/queue-message", {
-                "agent_id": target_agent_id,
-                "text": "\x1b",  # Escape character
-                "sender": "interrupt",
-            })
-            if resp.get("status") != "ok":
-                return f"Error: {resp.get('error', 'unknown')}"
-        except Exception as e:
-            return f"Error: {e}"
-    else:
-        pane_id = agent["pane_id"]
-        result = subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "Escape"],
-            capture_output=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return f"Error: tmux send-keys failed (rc={result.returncode})"
+    try:
+        resp = _post("/sidecar/queue-message", {
+            "agent_id": target_agent_id,
+            "text": "\x1b",  # Escape character
+            "sender": "interrupt",
+        })
+        if resp.get("status") != "ok":
+            return f"Error: {resp.get('error', 'unknown')}"
+    except Exception as e:
+        return f"Error: {e}"
 
     return f"Escape sent to {target_agent_id}"
 

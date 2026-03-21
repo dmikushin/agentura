@@ -26,7 +26,7 @@ from tmux_tools import tui_to_md
 
 
 HEARTBEAT_INTERVAL = 2  # seconds between loop iterations
-TOKEN_REFRESH_INTERVAL = 3600 * 12  # refresh delegation token every 12h
+TOKEN_REFRESH_INTERVAL = 2700  # refresh token every 45 min (agent_token TTL = 1h)
 
 
 class RemoteSidecar:
@@ -176,10 +176,26 @@ class RemoteSidecar:
             pass
 
     def _maybe_refresh_token(self):
-        """Refresh delegation token if it's getting old."""
+        """Refresh token before it expires. Tries agent-token refresh first,
+        then delegation token refresh as fallback."""
         elapsed = time.monotonic() - self._last_token_refresh
         if elapsed < TOKEN_REFRESH_INTERVAL:
             return
+
+        # Try refreshing via agent-token endpoint (works for both local and remote)
+        try:
+            resp = self._post("/api/auth/agent-token", {
+                "agent_id": self.agent_id,
+            })
+            if resp.get("status") == "ok":
+                self.token = resp["agent_token"]
+                self._last_token_refresh = time.monotonic()
+                print("[sidecar] Agent token refreshed", file=sys.stderr)
+                return
+        except Exception:
+            pass
+
+        # Fallback: try delegation token refresh
         try:
             resp = self._post_raw("/api/auth/delegate-refresh", {
                 "delegation_token": self.token,
