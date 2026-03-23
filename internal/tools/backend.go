@@ -6,6 +6,7 @@
 package tools
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -22,13 +23,14 @@ import (
 
 // Backend holds shared state for all tool implementations.
 type Backend struct {
-	monitorURL  string
-	sidecarSock string
-	agentID     string
-	agentToken  string
-	authToken   string
-	cursors     map[string]int
-	hostsPath   string
+	monitorURL   string
+	sidecarSock  string
+	agentID      string
+	agentToken   string
+	authToken    string
+	cursors      map[string]int
+	cursorsPath  string // file path for persistent cursors
+	hostsPath    string
 	agentPresets map[string]bool
 }
 
@@ -47,15 +49,48 @@ func NewBackend() (*Backend, error) {
 		hostsPath = filepath.Join(dataDir, "hosts.json")
 	}
 
-	return &Backend{
-		monitorURL:  monitorURL,
-		sidecarSock: os.Getenv("AGENTURA_SIDECAR_SOCK"),
-		agentID:     os.Getenv("AGENT_ID"),
-		agentToken:  os.Getenv("AGENT_TOKEN"),
-		cursors:     make(map[string]int),
-		hostsPath:   hostsPath,
+	// Cursor state persists across backend invocations via a temp file.
+	// Keyed by agent ID so each agent's MCP has its own cursor state.
+	agentID := os.Getenv("AGENT_ID")
+	cursorsPath := filepath.Join(os.TempDir(), fmt.Sprintf("agentura-cursors-%d.json", os.Getppid()))
+	if agentID != "" {
+		// Use a stable name based on agent ID hash
+		h := fmt.Sprintf("%x", md5Hash(agentID))[:12]
+		cursorsPath = filepath.Join(os.TempDir(), fmt.Sprintf("agentura-cursors-%s.json", h))
+	}
+
+	b := &Backend{
+		monitorURL:   monitorURL,
+		sidecarSock:  os.Getenv("AGENTURA_SIDECAR_SOCK"),
+		agentID:      agentID,
+		agentToken:   os.Getenv("AGENT_TOKEN"),
+		cursors:      make(map[string]int),
+		cursorsPath:  cursorsPath,
+		hostsPath:    hostsPath,
 		agentPresets: map[string]bool{"claude": true, "gemini": true},
-	}, nil
+	}
+	b.loadCursors()
+	return b, nil
+}
+
+func md5Hash(s string) []byte {
+	h := md5.Sum([]byte(s))
+	return h[:]
+}
+
+// loadCursors reads cursor state from disk.
+func (b *Backend) loadCursors() {
+	data, err := os.ReadFile(b.cursorsPath)
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &b.cursors)
+}
+
+// SaveCursors writes cursor state to disk. Called after tool execution.
+func (b *Backend) SaveCursors() {
+	data, _ := json.Marshal(b.cursors)
+	os.WriteFile(b.cursorsPath, data, 0644)
 }
 
 // get performs a GET request, trying sidecar IPC first, then direct HTTPS.

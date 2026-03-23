@@ -1,16 +1,32 @@
-// agentura-mcp — MCP stdio server for agentura.
+// agentura-mcp — stable MCP stdio server for agentura.
 //
-// Reads AGENTURA_URL, AGENTURA_SIDECAR_SOCK, AGENT_ID, AGENT_TOKEN from env.
-// Registers all 17 tools and serves them over stdio.
+// Thin shell that delegates every tool call to agentura-backend by exec'ing
+// it as a subprocess. This mirrors the Python design where mcp_server.py
+// reloads mcp_backend.py on every call:
+//
+//   - agentura-mcp  = stable, never needs restart (like mcp_server.py)
+//   - agentura-backend = replaceable on disk (like mcp_backend.py)
+//
+// Replace the backend binary → next tool call picks up the new version
+// automatically, without restarting the MCP connection to the agent.
+//
+// Backend binary location (in order of priority):
+//  1. AGENTURA_BACKEND env var
+//  2. agentura-backend next to this binary
+//  3. agentura-backend in PATH
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
-	"github.com/dmikushin/agentura/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -18,15 +34,14 @@ import (
 func main() {
 	log.SetFlags(0)
 
-	backend, err := tools.NewBackend()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if os.Getenv("AGENTURA_URL") == "" {
+		fmt.Fprintln(os.Stderr, "Error: AGENTURA_URL environment variable is required")
 		os.Exit(1)
 	}
 
 	s := server.NewMCPServer("agentura", "1.0.0")
 
-	registerTools(s, backend)
+	registerTools(s)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
@@ -34,25 +49,91 @@ func main() {
 	}
 }
 
-func registerTools(s *server.MCPServer, b *tools.Backend) {
+// findBackend locates the agentura-backend binary.
+func findBackend() string {
+	// 1. Explicit env var
+	if p := os.Getenv("AGENTURA_BACKEND"); p != "" {
+		return p
+	}
+
+	// 2. Next to this binary
+	if self, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(self), "agentura-backend")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// 3. In PATH
+	if p, err := exec.LookPath("agentura-backend"); err == nil {
+		return p
+	}
+
+	return "agentura-backend" // fallback, will fail with a clear error
+}
+
+// callBackend exec's agentura-backend with the given tool name and args.
+// Returns the tool result string.
+func callBackend(toolName string, args map[string]interface{}) string {
+	backendPath := findBackend()
+
+	argsJSON, _ := json.Marshal(args)
+
+	cmd := exec.Command(backendPath, toolName)
+	cmd.Stdin = bytes.NewReader(argsJSON)
+	cmd.Env = os.Environ() // pass through all env vars
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr != "" {
+			return fmt.Sprintf("Error: backend failed: %s", stderrStr)
+		}
+		return fmt.Sprintf("Error: backend failed: %v", err)
+	}
+
+	// Parse JSON response
+	var resp map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		// If not valid JSON, return raw output
+		return strings.TrimSpace(stdout.String())
+	}
+
+	if errMsg, ok := resp["error"]; ok {
+		return fmt.Sprintf("Error: %s", errMsg)
+	}
+	return resp["result"]
+}
+
+// makeHandler creates an MCP tool handler that delegates to the backend binary.
+func makeHandler(toolName string) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := make(map[string]interface{})
+		if a := req.GetArguments(); a != nil {
+			args = a
+		}
+		result := callBackend(toolName, args)
+		return mcp.NewToolResultText(result), nil
+	}
+}
+
+func registerTools(s *server.MCPServer) {
 	// --- Agent tools ---
 
 	s.AddTool(
 		mcp.NewTool("list_agents",
 			mcp.WithDescription("List all AI agents currently registered with agentura.\n\nEach agent is identified by hostname@cwd:PID where:\n- hostname: machine where the agent runs\n- cwd: the starting working directory of the agent\n- PID: process ID of the agent\n\nReturns a formatted list of connected agents with their details."),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText(b.ListAgents()), nil
-		},
+		makeHandler("list_agents"),
 	)
 
 	s.AddTool(
 		mcp.NewTool("list_hosts",
 			mcp.WithDescription("List available hosts — local machine and remote SSH-accessible hosts.\n\nRemote hosts are configured in hosts.json with SSH address, tags,\nGPU/CPU info, and notes. Returns all hosts where agents can be deployed."),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText(b.ListHosts()), nil
-		},
+		makeHandler("list_hosts"),
 	)
 
 	s.AddTool(
@@ -79,14 +160,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("team name to assign the new agent to (optional)"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			hostname := req.GetString("hostname", "")
-			cwd := req.GetString("cwd", "")
-			agentType := req.GetString("agent_type", "")
-			blocking := req.GetBool("blocking", true)
-			team := req.GetString("team", "")
-			return mcp.NewToolResultText(b.CreateAgent(hostname, cwd, agentType, blocking, team)), nil
-		},
+		makeHandler("create_agent"),
 	)
 
 	s.AddTool(
@@ -97,10 +171,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("target agent identifier (hostname@cwd:PID from list_agents)"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			agentID := req.GetString("agent_id", "")
-			return mcp.NewToolResultText(b.ReadStream(agentID)), nil
-		},
+		makeHandler("read_stream"),
 	)
 
 	// --- Messaging tools ---
@@ -121,12 +192,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.DefaultBool(false),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			targetID := req.GetString("target_agent_id", "")
-			message := req.GetString("message", "")
-			rsvp := req.GetBool("rsvp", false)
-			return mcp.NewToolResultText(b.SendMessage(targetID, message, rsvp)), nil
-		},
+		makeHandler("send_message"),
 	)
 
 	s.AddTool(
@@ -137,10 +203,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent to interrupt (hostname@cwd:PID from list_agents)"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			targetID := req.GetString("target_agent_id", "")
-			return mcp.NewToolResultText(b.InterruptAgent(targetID)), nil
-		},
+		makeHandler("interrupt_agent"),
 	)
 
 	// --- Team tools ---
@@ -149,9 +212,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 		mcp.NewTool("list_teams",
 			mcp.WithDescription("List all agent teams with their owners and members."),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText(b.ListTeams()), nil
-		},
+		makeHandler("list_teams"),
 	)
 
 	s.AddTool(
@@ -162,10 +223,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("team name (must be unique)"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			name := req.GetString("name", "")
-			return mcp.NewToolResultText(b.CreateTeam(name)), nil
-		},
+		makeHandler("create_team"),
 	)
 
 	s.AddTool(
@@ -179,11 +237,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("optional message to the team owner explaining why you want to join"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			message := req.GetString("message", "")
-			return mcp.NewToolResultText(b.RequestJoinTeam(teamName, message)), nil
-		},
+		makeHandler("request_join_team"),
 	)
 
 	s.AddTool(
@@ -198,11 +252,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent_id of the requester to approve"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			pendingID := req.GetString("pending_agent_id", "")
-			return mcp.NewToolResultText(b.ApproveJoin(teamName, pendingID)), nil
-		},
+		makeHandler("approve_join"),
 	)
 
 	s.AddTool(
@@ -217,11 +267,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent_id of the requester to deny"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			pendingID := req.GetString("pending_agent_id", "")
-			return mcp.NewToolResultText(b.DenyJoin(teamName, pendingID)), nil
-		},
+		makeHandler("deny_join"),
 	)
 
 	s.AddTool(
@@ -232,10 +278,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("name of the team"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			return mcp.NewToolResultText(b.ListPendingRequests(teamName)), nil
-		},
+		makeHandler("list_pending_requests"),
 	)
 
 	s.AddTool(
@@ -250,11 +293,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent_id of the member to become the new owner"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			newOwner := req.GetString("new_owner", "")
-			return mcp.NewToolResultText(b.TransferOwnership(teamName, newOwner)), nil
-		},
+		makeHandler("transfer_ownership"),
 	)
 
 	s.AddTool(
@@ -265,10 +304,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("name of the team to leave"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			return mcp.NewToolResultText(b.LeaveTeam(teamName)), nil
-		},
+		makeHandler("leave_team"),
 	)
 
 	s.AddTool(
@@ -283,11 +319,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent_id of the member to promote to admin"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			adminID := req.GetString("admin_agent_id", "")
-			return mcp.NewToolResultText(b.AddAdmin(teamName, adminID)), nil
-		},
+		makeHandler("add_admin"),
 	)
 
 	s.AddTool(
@@ -302,11 +334,7 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("agent_id of the admin to demote"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			adminID := req.GetString("admin_agent_id", "")
-			return mcp.NewToolResultText(b.RemoveAdmin(teamName, adminID)), nil
-		},
+		makeHandler("remove_admin"),
 	)
 
 	s.AddTool(
@@ -320,10 +348,6 @@ func registerTools(s *server.MCPServer, b *tools.Backend) {
 				mcp.Description("optional reason for the force-succession request"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			teamName := req.GetString("team_name", "")
-			reason := req.GetString("reason", "")
-			return mcp.NewToolResultText(b.ForceSuccession(teamName, reason)), nil
-		},
+		makeHandler("force_succession"),
 	)
 }
