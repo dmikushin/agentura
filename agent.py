@@ -200,6 +200,10 @@ def main():
     if cmd == "claude":
         _ensure_claude_trust(cwd)
 
+    # --- Set up IPC socket path for sidecar ↔ MCP communication ---
+    sock_path = f"/tmp/agentura-sidecar-{os.getpid()}.sock"
+    os.environ["AGENTURA_SIDECAR_SOCK"] = sock_path
+
     # --- Fork: child=agent, parent=sidecar ---
     child_pid = os.fork()
     if child_pid == 0:
@@ -218,6 +222,7 @@ def main():
                 agent_id=agent_id,
                 pane_id=pane_id,
                 child_pid=child_pid,
+                socket_path=sock_path,
             )
             sidecar.run()
         else:

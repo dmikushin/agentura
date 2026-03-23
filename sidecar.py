@@ -33,14 +33,16 @@ class RemoteSidecar:
     """Sidecar process that monitors a local agent and communicates with the central server."""
 
     def __init__(self, monitor_url: str, token: str, agent_id: str,
-                 pane_id: str, child_pid: int):
+                 pane_id: str, child_pid: int, socket_path: str = ""):
         self.monitor_url = monitor_url.rstrip("/")
         self.token = token
         self.agent_id = agent_id
         self.pane_id = pane_id
         self.child_pid = child_pid
+        self.socket_path = socket_path
         self.prev_hashes: set[str] = set()
         self._last_token_refresh = time.monotonic()
+        self._listener = None
 
     def run(self):
         """Main sidecar loop: capture, push, heartbeat, poll messages."""
@@ -49,10 +51,18 @@ class RemoteSidecar:
         def _shutdown(signum, frame):
             print(f"[sidecar] Signal {signum}, sending final heartbeat", file=sys.stderr)
             self._heartbeat(child_alive=False)
+            if self._listener:
+                self._listener.close()
             sys.exit(0)
 
         signal.signal(signal.SIGTERM, _shutdown)
         signal.signal(signal.SIGHUP, _shutdown)
+
+        # Start IPC listener for MCP backend
+        if self.socket_path:
+            from sidecar_ipc import SidecarListener
+            self._listener = SidecarListener(self.socket_path)
+            print(f"[sidecar] IPC listening on {self.socket_path}", file=sys.stderr)
 
         print(f"[sidecar] Started for agent {self.agent_id} (child PID {self.child_pid})",
               file=sys.stderr)
@@ -84,7 +94,11 @@ class RemoteSidecar:
                           file=sys.stderr)
                     break
 
-                time.sleep(HEARTBEAT_INTERVAL)
+                # Process IPC requests from MCP (also serves as sleep)
+                if self._listener:
+                    self._listener.process_pending(self._proxy, timeout=HEARTBEAT_INTERVAL)
+                else:
+                    time.sleep(HEARTBEAT_INTERVAL)
         except KeyboardInterrupt:
             print("[sidecar] Interrupted", file=sys.stderr)
         finally:
@@ -93,6 +107,10 @@ class RemoteSidecar:
                 self._heartbeat(child_alive=False)
             except Exception:
                 pass
+            # Close IPC listener
+            if self._listener:
+                self._listener.close()
+                self._listener = None
 
     def _pid_alive(self, pid: int) -> bool:
         if pid <= 0:
@@ -174,6 +192,17 @@ class RemoteSidecar:
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
+
+    def _proxy(self, method: str, path: str, data: dict | None = None) -> dict:
+        """Proxy an IPC request from MCP backend to the central server."""
+        # Inject agent_token into body if requested
+        if data and data.pop("_inject_agent_token", False):
+            data["agent_token"] = self.token
+
+        if method == "POST" and data is not None:
+            return self._post(path, data)
+        else:
+            return self._get(path)
 
     def _maybe_refresh_token(self):
         """Refresh token before it expires. Tries agent-token refresh first,

@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["agent", "tmux_tools", "server", "mcp_server", "mcp_backend", "auth", "sidecar"]
+py-modules = ["agent", "tmux_tools", "server", "mcp_server", "mcp_backend", "auth", "sidecar", "sidecar_ipc"]
 
 [project.scripts]
 agent-run = "agent:main"

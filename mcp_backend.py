@@ -26,6 +26,7 @@ if not MONITOR_URL:
 AGENT_RUN_PATH = "agent-run"
 DATA_DIR = Path(os.environ.get("AGENTURA_DATA_DIR", "/data"))
 HOSTS_REGISTRY_PATH = Path(os.environ.get("HOSTS_REGISTRY_PATH", str(DATA_DIR / "hosts.json")))
+SIDECAR_SOCK = os.environ.get("AGENTURA_SIDECAR_SOCK")
 
 AGENT_PRESETS = {"claude", "gemini"}
 
@@ -39,30 +40,18 @@ _agent_id: str | None = os.environ.get("AGENT_ID")
 # --- HTTP helpers ---
 
 def _refresh_token():
+    """Refresh auth tokens (only used in direct HTTP fallback mode)."""
     global _auth_token, _agent_token, _agent_id
     try:
         _auth_token = authenticate(MONITOR_URL)
     except Exception:
         _auth_token = None
-    # Also refresh agent_token and agent_id from env (agent.py may have set them)
     env_token = os.environ.get("AGENT_TOKEN")
     if env_token:
         _agent_token = env_token
     env_id = os.environ.get("AGENT_ID")
     if env_id:
         _agent_id = env_id
-
-
-def _refresh_agent_token(agent_id: str):
-    """Refresh the agent token via the server."""
-    global _agent_token
-    try:
-        resp = _post("/api/auth/agent-token", {"agent_id": agent_id})
-        if resp.get("status") == "ok":
-            _agent_token = resp["agent_token"]
-            os.environ["AGENT_TOKEN"] = _agent_token
-    except Exception:
-        pass
 
 
 def _get_auth_headers() -> dict:
@@ -74,6 +63,14 @@ def _get_auth_headers() -> dict:
 
 
 def _get(path: str) -> dict:
+    # Try sidecar IPC first
+    if SIDECAR_SOCK:
+        try:
+            from sidecar_ipc import sidecar_request, SidecarUnavailable
+            return sidecar_request(SIDECAR_SOCK, "GET", path)
+        except SidecarUnavailable:
+            pass  # fall through to direct HTTP
+
     for attempt in range(2):
         req = urllib.request.Request(f"{MONITOR_URL}{path}", headers=_get_auth_headers())
         try:
@@ -87,6 +84,18 @@ def _get(path: str) -> dict:
 
 
 def _post(path: str, data: dict) -> dict:
+    # Try sidecar IPC first (sidecar handles _inject_agent_token)
+    if SIDECAR_SOCK:
+        try:
+            from sidecar_ipc import sidecar_request, SidecarUnavailable
+            return sidecar_request(SIDECAR_SOCK, "POST", path, data)
+        except SidecarUnavailable:
+            pass  # fall through to direct HTTP
+
+    # Direct HTTP fallback: replace _inject_agent_token with real token
+    if data and data.pop("_inject_agent_token", False):
+        data["agent_token"] = _agent_token
+
     for attempt in range(2):
         headers = {"Content-Type": "application/json"}
         headers.update(_get_auth_headers())
@@ -331,7 +340,7 @@ def _create_remote_agent(hostname: str, host_info: dict, cwd: str,
     try:
         resp = _post("/api/auth/delegate", {
             "target_host": hostname,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
         if resp.get("status") != "ok":
             return f"Error: failed to create delegation token: {resp.get('error', 'unknown')}"
@@ -429,7 +438,7 @@ def _handle_team_assignment(new_agent_id: str | None, team: str,
                 team_name = sender_teams[0]
             else:
                 team_name = f"team-{int(time.time())}"
-                _post("/teams", {"name": team_name, "agent_token": _agent_token})
+                _post("/teams", {"name": team_name, "_inject_agent_token": True})
                 team_msg = f", new team '{team_name}' created"
 
         if team_name:
@@ -445,7 +454,7 @@ def _handle_team_assignment(new_agent_id: str | None, team: str,
                     _post("/teams/approve", {
                         "team": team_name,
                         "pending_agent_id": new_agent_id,
-                        "agent_token": _agent_token,
+                        "_inject_agent_token": True,
                     })
                     if not team_msg:
                         team_msg = f", joined team '{team_name}'"
@@ -595,7 +604,7 @@ def create_team(name: str) -> str:
     if not _agent_token:
         return "Error: no AGENT_TOKEN available (agent not registered?)"
     try:
-        resp = _post("/teams", {"name": name, "agent_token": _agent_token})
+        resp = _post("/teams", {"name": name, "_inject_agent_token": True})
     except urllib.error.URLError:
         return "Error: agentura server is not running"
     except urllib.error.HTTPError as e:
@@ -617,7 +626,7 @@ def request_join_team(team_name: str, message: str = "") -> str:
     try:
         resp = _post("/teams/request-join", {
             "team": team_name,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
             "message": message,
         })
     except urllib.error.URLError:
@@ -644,7 +653,7 @@ def approve_join(team_name: str, pending_agent_id: str) -> str:
         resp = _post("/teams/approve", {
             "team": team_name,
             "pending_agent_id": pending_agent_id,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -670,7 +679,7 @@ def deny_join(team_name: str, pending_agent_id: str) -> str:
         resp = _post("/teams/deny", {
             "team": team_name,
             "pending_agent_id": pending_agent_id,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -721,7 +730,7 @@ def transfer_ownership(team_name: str, new_owner: str) -> str:
         resp = _post("/teams/transfer", {
             "team": team_name,
             "new_owner": new_owner,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -749,7 +758,7 @@ def leave_team(team_name: str) -> str:
     try:
         resp = _post("/teams/leave", {
             "team": team_name,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -780,7 +789,7 @@ def add_admin(team_name: str, admin_agent_id: str) -> str:
         resp = _post("/teams/add-admin", {
             "team": team_name,
             "admin_agent_id": admin_agent_id,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -811,7 +820,7 @@ def remove_admin(team_name: str, admin_agent_id: str) -> str:
         resp = _post("/teams/remove-admin", {
             "team": team_name,
             "admin_agent_id": admin_agent_id,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
         })
     except urllib.error.URLError:
         return "Error: agentura server is not running"
@@ -843,7 +852,7 @@ def force_succession(team_name: str, reason: str = "") -> str:
     try:
         resp = _post("/teams/force-succession", {
             "team": team_name,
-            "agent_token": _agent_token,
+            "_inject_agent_token": True,
             "reason": reason,
         })
     except urllib.error.URLError:
