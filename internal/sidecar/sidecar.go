@@ -1,0 +1,318 @@
+package sidecar
+
+import (
+	"crypto/md5"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/dmikushin/agentura/internal/api"
+	"github.com/dmikushin/agentura/internal/tmux"
+)
+
+const (
+	// HeartbeatInterval is the time between sidecar loop iterations.
+	HeartbeatInterval = 2 * time.Second
+	// TokenRefreshInterval is how often to refresh the agent token (45 min).
+	TokenRefreshInterval = 45 * time.Minute
+)
+
+// Sidecar monitors a local agent and communicates with the central server.
+type Sidecar struct {
+	client     *api.Client
+	agentID    string
+	paneID     string
+	childPID   int
+	socketPath string
+
+	prevHashes       map[string]bool
+	hashHistory      []string
+	lastTokenRefresh time.Time
+	listener         *Listener
+}
+
+// Config holds the configuration for creating a new Sidecar.
+type Config struct {
+	MonitorURL string
+	Token      string
+	AgentID    string
+	PaneID     string
+	ChildPID   int
+	SocketPath string
+}
+
+// New creates a new Sidecar instance.
+func New(cfg Config) *Sidecar {
+	return &Sidecar{
+		client:           api.NewClient(cfg.MonitorURL, cfg.Token),
+		agentID:          cfg.AgentID,
+		paneID:           cfg.PaneID,
+		childPID:         cfg.ChildPID,
+		socketPath:       cfg.SocketPath,
+		prevHashes:       make(map[string]bool),
+		lastTokenRefresh: time.Now(),
+	}
+}
+
+// Run starts the main sidecar loop: capture, push, heartbeat, poll messages.
+func (s *Sidecar) Run() {
+	// Set up signal handlers
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf("[sidecar] Signal %v, sending final heartbeat", sig)
+		s.heartbeat(false)
+		if s.listener != nil {
+			s.listener.Close()
+		}
+		os.Exit(0)
+	}()
+
+	// Start IPC listener
+	if s.socketPath != "" {
+		ln, err := NewListener(s.socketPath)
+		if err != nil {
+			log.Printf("[sidecar] Warning: IPC listener failed: %v", err)
+		} else {
+			s.listener = ln
+			log.Printf("[sidecar] IPC listening on %s", s.socketPath)
+		}
+	}
+
+	log.Printf("[sidecar] Started for agent %s (child PID %d)", s.agentID, s.childPID)
+
+	for {
+		childAlive := s.pidAlive(s.childPID)
+
+		// Capture and push stream content
+		content, err := tmux.CapturePane(s.paneID, 200)
+		if err == nil && content != "" {
+			if newContent := s.dedup(content); newContent != "" {
+				cleaned := tmux.TUIToMd(newContent)
+				if cleaned != "" {
+					s.pushStream(cleaned)
+				}
+			}
+		}
+
+		// Heartbeat
+		s.heartbeat(childAlive)
+
+		// Poll and inject messages
+		messages := s.pollMessages()
+		for i, msg := range messages {
+			if i > 0 {
+				time.Sleep(300 * time.Millisecond)
+			}
+			text, _ := msg["text"].(string)
+			if text != "" {
+				tmux.Inject(s.paneID, text)
+			}
+		}
+
+		// Token refresh
+		s.maybeRefreshToken()
+
+		if !childAlive {
+			log.Printf("[sidecar] Child PID %d exited, shutting down", s.childPID)
+			break
+		}
+
+		// Process IPC requests (also serves as sleep between iterations)
+		if s.listener != nil {
+			s.listener.ProcessPending(s.proxy, HeartbeatInterval)
+		} else {
+			time.Sleep(HeartbeatInterval)
+		}
+	}
+
+	// Final cleanup
+	s.heartbeat(false)
+	if s.listener != nil {
+		s.listener.Close()
+	}
+}
+
+func (s *Sidecar) pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 checks if process exists
+	err = proc.Signal(syscall.Signal(0))
+	if err == nil {
+		return true
+	}
+	// EPERM means process exists but we can't signal it
+	if err == syscall.EPERM {
+		return true
+	}
+	return false
+}
+
+func (s *Sidecar) dedup(content string) string {
+	lines := splitLines(content)
+	var hashes []string
+	var newLines []string
+
+	for i, line := range lines {
+		context := ""
+		if i > 0 {
+			context = lines[i-1]
+		}
+		h := fmt.Sprintf("%x", md5.Sum([]byte(context+"|"+line)))[:12]
+		hashes = append(hashes, h)
+		if !s.prevHashes[h] {
+			newLines = append(newLines, line)
+		}
+	}
+
+	// Update hash set (keep only last 500)
+	s.prevHashes = make(map[string]bool)
+	start := 0
+	if len(hashes) > 500 {
+		start = len(hashes) - 500
+	}
+	s.hashHistory = hashes[start:]
+	for _, h := range s.hashHistory {
+		s.prevHashes[h] = true
+	}
+
+	if len(newLines) == 0 {
+		return ""
+	}
+	return joinLines(newLines)
+}
+
+func (s *Sidecar) pushStream(content string) {
+	s.client.Post("/sidecar/stream-push", map[string]interface{}{
+		"agent_id": s.agentID,
+		"content":  content,
+	})
+}
+
+func (s *Sidecar) heartbeat(childAlive bool) {
+	s.client.Post("/sidecar/heartbeat", map[string]interface{}{
+		"agent_id":    s.agentID,
+		"child_alive": childAlive,
+	})
+}
+
+func (s *Sidecar) pollMessages() []map[string]interface{} {
+	resp, err := s.client.Get(fmt.Sprintf("/sidecar/messages?agent_id=%s", s.agentID))
+	if err != nil {
+		return nil
+	}
+	msgsRaw, ok := resp["messages"]
+	if !ok {
+		return nil
+	}
+	msgsSlice, ok := msgsRaw.([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []map[string]interface{}
+	for _, m := range msgsSlice {
+		if msg, ok := m.(map[string]interface{}); ok {
+			result = append(result, msg)
+		}
+	}
+	return result
+}
+
+func (s *Sidecar) proxy(method, path string, data map[string]interface{}) (map[string]interface{}, error) {
+	// Inject agent_token if requested
+	if data != nil {
+		if _, ok := data["_inject_agent_token"]; ok {
+			delete(data, "_inject_agent_token")
+			data["agent_token"] = s.client.Token
+		}
+	}
+
+	if method == "POST" && data != nil {
+		return s.client.Post(path, data)
+	}
+	return s.client.Get(path)
+}
+
+func (s *Sidecar) maybeRefreshToken() {
+	if time.Since(s.lastTokenRefresh) < TokenRefreshInterval {
+		return
+	}
+
+	// Try agent-token refresh
+	resp, err := s.client.Post("/api/auth/agent-token", map[string]interface{}{
+		"agent_id": s.agentID,
+	})
+	if err == nil {
+		if status, _ := resp["status"].(string); status == "ok" {
+			if token, ok := resp["agent_token"].(string); ok {
+				s.client.Token = token
+				s.lastTokenRefresh = time.Now()
+				log.Printf("[sidecar] Agent token refreshed")
+				return
+			}
+		}
+	}
+
+	// Fallback: delegation token refresh
+	resp, err = s.client.PostRaw("/api/auth/delegate-refresh", map[string]interface{}{
+		"delegation_token": s.client.Token,
+	})
+	if err == nil {
+		if status, _ := resp["status"].(string); status == "ok" {
+			if token, ok := resp["delegation_token"].(string); ok {
+				s.client.Token = token
+				s.lastTokenRefresh = time.Now()
+				log.Printf("[sidecar] Delegation token refreshed")
+				return
+			}
+		}
+	}
+
+	log.Printf("[sidecar] Token refresh failed")
+}
+
+// UpdateToken updates the auth token used by the sidecar's API client.
+func (s *Sidecar) UpdateToken(token string) {
+	s.client.Token = token
+}
+
+// splitLines splits text into lines without using strings to keep the import minimal.
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+func joinLines(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	result := lines[0]
+	for _, l := range lines[1:] {
+		result += "\n" + l
+	}
+	return result
+}
+
+// marshalJSON is a helper for JSON encoding (unused import avoidance).
+var _ = json.Marshal
