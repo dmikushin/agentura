@@ -82,8 +82,12 @@ class RemoteSidecar:
                 # Heartbeat
                 self._heartbeat(child_alive)
 
-                # Poll and inject messages
-                for msg in self._poll_messages():
+                # Poll and inject messages (with delay between messages
+                # to let the terminal process each one)
+                messages = self._poll_messages()
+                for i, msg in enumerate(messages):
+                    if i > 0:
+                        time.sleep(0.3)
                     self._inject(msg["text"])
 
                 # Token refresh
