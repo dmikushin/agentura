@@ -59,11 +59,10 @@ def list_hosts() -> str:
 @mcp.tool()
 def create_agent(hostname: str, cwd: str, agent_type: str,
                  blocking: bool = True, team: str = "") -> str:
-    """Create a new AI agent in a tmux window on a local or remote host.
+    """Create a new AI agent on a local or remote host.
 
-    For remote hosts, the agent is launched via SSH with a delegation token.
-    A sidecar process on the remote host handles stream capture, heartbeats,
-    and message delivery back to the central server.
+    For remote hosts, the agent is launched via SSH. A sidecar process
+    handles monitoring and message delivery.
     Your identity is taken automatically from AGENT_ID (set by agent-run).
 
     Args:
@@ -99,15 +98,17 @@ def read_stream(agent_id: str) -> str:
 @mcp.tool()
 def send_message(target_agent_id: str, message: str,
                  rsvp: bool = False) -> str:
-    """Send a message to another agent via the server's message queue.
+    """Send a message to another agent.
 
-    The agent's sidecar delivers it to the tmux pane via send-keys.
     Your identity is taken automatically from AGENT_ID (set by agent-run).
 
     Args:
         target_agent_id: recipient agent (hostname@cwd:PID from list_agents)
         message: text to send
-        rsvp: if True, append /rsvp command requesting immediate reply
+        rsvp: if True, the target agent will reply to you directly via
+              send_message when done. This lets you work on other tasks
+              in parallel instead of polling read_stream in a loop.
+              Strongly recommended for any request that expects a response.
 
     Returns:
         Delivery confirmation or error.
@@ -118,9 +119,9 @@ def send_message(target_agent_id: str, message: str,
 
 @mcp.tool()
 def interrupt_agent(target_agent_id: str) -> str:
-    """Interrupt an agent by sending Escape to its tmux pane.
+    """Interrupt an agent by sending Escape.
 
-    Use this to cancel a hanging operation (e.g. a stuck MCP tool call).
+    Use this to cancel a hanging operation (e.g. a stuck tool call).
     The agent's current action is aborted and it returns to the prompt.
 
     Args:

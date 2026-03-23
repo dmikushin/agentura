@@ -187,7 +187,7 @@ def main():
               "Hello from A" in pane_content,
               pane_content[-200:])
         check("sender_id prefix present",
-              f"[{agent_a}]" in pane_content,
+              f"Agent {agent_a} says to you:" in pane_content,
               pane_content[-200:])
 
         # --- Test: rsvp mode ---

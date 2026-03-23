@@ -517,12 +517,13 @@ def send_message(target_agent_id: str, message: str,
 
     sender_agent_id = _agent_id
 
-    full_message = f"[{sender_agent_id}] {message}"
+    # Format: human-readable sender prefix
+    full_message = f"Agent {sender_agent_id} says to you: {message}"
 
     if agent.get("name") == "gemini":
         full_message = full_message.replace("!", ".")
 
-    # All agents use message queue → sidecar injects via tmux send-keys
+    # Append rsvp skill if requested
     if rsvp:
         full_message += f"\n/rsvp {sender_agent_id}"
 

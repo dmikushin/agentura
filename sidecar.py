@@ -177,17 +177,32 @@ class RemoteSidecar:
             return []
 
     def _inject(self, text: str):
-        """Inject text into the local tmux pane via send-keys."""
+        """Inject text into the local tmux pane.
+
+        Uses load-buffer + paste-buffer for reliable text input (avoids
+        send-keys issues with special characters and nodejs input buffering).
+        """
         try:
             if text == "\x1b":
-                # Escape: send without Enter (interrupt current operation)
+                # Escape: send-keys for control sequences
                 subprocess.run(
                     ["tmux", "send-keys", "-t", self.pane_id, "Escape"],
                     capture_output=True, timeout=5,
                 )
             else:
+                # Paste text via tmux buffer (reliable, bypasses input issues)
                 subprocess.run(
-                    ["tmux", "send-keys", "-t", self.pane_id, text, "Enter"],
+                    ["tmux", "load-buffer", "-"],
+                    input=text.encode(), capture_output=True, timeout=5,
+                )
+                subprocess.run(
+                    ["tmux", "paste-buffer", "-t", self.pane_id],
+                    capture_output=True, timeout=5,
+                )
+                # Send Enter separately
+                time.sleep(0.05)
+                subprocess.run(
+                    ["tmux", "send-keys", "-t", self.pane_id, "Enter"],
                     capture_output=True, timeout=5,
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

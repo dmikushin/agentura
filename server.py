@@ -529,10 +529,9 @@ async def capture_loop(registry: AgentRegistry, team_registry: TeamRegistry, shu
 # --- HTTP handlers ---
 
 async def _notify_agent(registry: AgentRegistry, agent_id: str, message: str):
-    """Queue a [SYSTEM] notification for an agent."""
+    """Queue a notification for an agent (delivered by sidecar)."""
     entry = registry.agents.get(agent_id)
     if not entry:
-        # Fallback: search by agent_id property
         for e in registry.agents.values():
             if e.agent_id == agent_id:
                 entry = e
@@ -540,11 +539,9 @@ async def _notify_agent(registry: AgentRegistry, agent_id: str, message: str):
     if not entry:
         return
 
-    text = f"[SYSTEM] {message}"
-
     entry.message_queue.append({
-        "text": text,
-        "sender": "system",
+        "text": f"Agentura notification: {message}",
+        "sender": "agentura",
         "timestamp": _now(),
     })
 
