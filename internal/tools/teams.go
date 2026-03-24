@@ -415,3 +415,62 @@ func (b *Backend) ForceSuccession(teamName, reason string) string {
 	errMsg, _ := resp["error"].(string)
 	return fmt.Sprintf("Error: %s", errMsg)
 }
+
+// PostToBoard appends a note to the team's shared board.
+func (b *Backend) PostToBoard(teamName, text string) string {
+	if b.agentID == "" {
+		return "Error: AGENT_ID env not set (not running under agent-run?)"
+	}
+
+	resp, err := b.post("/teams/board", map[string]interface{}{
+		"team_name": teamName,
+		"text":      text,
+		"sender":    b.agentID,
+	})
+	if err != nil {
+		if httpErr, ok := err.(*api.HTTPError); ok {
+			switch httpErr.StatusCode {
+			case 404:
+				return fmt.Sprintf("Error: team '%s' not found", teamName)
+			case 403:
+				return fmt.Sprintf("Error: you are not a member of team '%s'", teamName)
+			}
+		}
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if status, _ := resp["status"].(string); status == "ok" {
+		return fmt.Sprintf("Posted to '%s' board", teamName)
+	}
+	errMsg, _ := resp["error"].(string)
+	return fmt.Sprintf("Error: %s", errMsg)
+}
+
+// ReadBoard reads entries from the team's shared board.
+func (b *Backend) ReadBoard(teamName string) string {
+	resp, err := b.get(fmt.Sprintf("/teams/board?team_name=%s", urlEncode(teamName)))
+	if err != nil {
+		if httpErr, ok := err.(*api.HTTPError); ok && httpErr.StatusCode == 404 {
+			return fmt.Sprintf("Error: team '%s' not found", teamName)
+		}
+		return fmt.Sprintf("Error: %v", err)
+	}
+
+	entries, _ := resp["entries"].([]interface{})
+	if len(entries) == 0 {
+		return fmt.Sprintf("Team '%s' board is empty.", teamName)
+	}
+
+	var lines []string
+	for _, e := range entries {
+		entry, ok := e.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		author, _ := entry["author"].(string)
+		text, _ := entry["text"].(string)
+		ts, _ := entry["timestamp"].(string)
+		lines = append(lines, fmt.Sprintf("[%s] **%s**: %s", ts, author, text))
+	}
+
+	return fmt.Sprintf("Team '%s' board (%d entries):\n\n%s", teamName, len(entries), strings.Join(lines, "\n"))
+}

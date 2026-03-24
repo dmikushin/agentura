@@ -207,8 +207,12 @@ func formatAgent(a map[string]interface{}) string {
 		}
 	}
 	cmd := strings.Join(cmdParts, " ")
-	return fmt.Sprintf("- **%s** — %s (pane %s, host %s, since %s)\n  cmd: `%s`",
+	line := fmt.Sprintf("- **%s** — %s (pane %s, host %s, since %s)\n  cmd: `%s`",
 		agentID, name, paneID, host, startedAt, cmd)
+	if bio, _ := a["bio"].(string); bio != "" {
+		line += fmt.Sprintf("\n  bio: %s", bio)
+	}
+	return line
 }
 
 func (b *Backend) loadHostRegistry() map[string]interface{} {

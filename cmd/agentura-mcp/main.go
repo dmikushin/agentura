@@ -211,6 +211,32 @@ func registerTools(s *server.MCPServer) {
 	)
 
 	s.AddTool(
+		mcp.NewTool("post_to_board",
+			mcp.WithDescription("Post a note to the team's shared board.\n\nThe board is a persistent, append-only log visible to all team members.\nUse it for decisions, findings, status updates, and shared context."),
+			mcp.WithString("team_name",
+				mcp.Required(),
+				mcp.Description("name of the team"),
+			),
+			mcp.WithString("text",
+				mcp.Required(),
+				mcp.Description("note text to post"),
+			),
+		),
+		makeHandler("post_to_board"),
+	)
+
+	s.AddTool(
+		mcp.NewTool("read_board",
+			mcp.WithDescription("Read the team's shared board.\n\nReturns all entries with timestamps and authors.\nUse this to catch up on team context and decisions."),
+			mcp.WithString("team_name",
+				mcp.Required(),
+				mcp.Description("name of the team"),
+			),
+		),
+		makeHandler("read_board"),
+	)
+
+	s.AddTool(
 		mcp.NewTool("broadcast_message",
 			mcp.WithDescription("Send a message to all members of a team.\n\nThe message is delivered to every team member except yourself.\nYou must be a member of the team to broadcast."),
 			mcp.WithString("team_name",

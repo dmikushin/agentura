@@ -127,6 +127,8 @@ func main() {
 	hostname, _ := os.Hostname()
 	cwd, _ := os.Getwd()
 
+	bio := os.Getenv("AGENTURA_BIO")
+
 	payload := map[string]interface{}{
 		"agent_name": filepath.Base(cmdName),
 		"pane_id":    paneID,
@@ -134,6 +136,7 @@ func main() {
 		"hostname":   hostname,
 		"cwd":        cwd,
 		"cmd":        args,
+		"bio":        bio,
 	}
 
 	var agentToken, agentID string

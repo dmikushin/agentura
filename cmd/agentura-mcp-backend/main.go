@@ -130,6 +130,10 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 		return b.RemoveAdmin(getString("team_name"), getString("admin_agent_id"))
 	case "force_succession":
 		return b.ForceSuccession(getString("team_name"), getString("reason"))
+	case "post_to_board":
+		return b.PostToBoard(getString("team_name"), getString("text"))
+	case "read_board":
+		return b.ReadBoard(getString("team_name"))
 
 	default:
 		return fmt.Sprintf("Error: unknown tool '%s'", tool)

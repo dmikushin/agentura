@@ -34,6 +34,7 @@ from auth import SSHKeyVerifier, AuthSessionStore
 DATA_DIR = Path(os.environ.get("AGENTURA_DATA_DIR", "/data"))
 STREAMS_DIR = DATA_DIR / "streams"
 REGISTRY_PATH = STREAMS_DIR / "_registry.json"
+BOARDS_DIR = DATA_DIR / "boards"
 SKILLS_DIR = Path(os.environ.get("SKILLS_DIR", "/app/skills"))
 AUTH_KEYS_PATH = os.environ.get("AUTHORIZED_KEYS", "/app/secrets/authorized_keys")
 
@@ -49,19 +50,20 @@ class AgentEntry:
     """Represents a registered agent."""
 
     __slots__ = (
-        "name", "pane_id", "pid", "hostname", "cwd", "cmd", "stream_file",
-        "started_at", "teams",
+        "name", "pane_id", "pid", "hostname", "cwd", "cmd", "bio",
+        "stream_file", "started_at", "teams",
         "last_heartbeat", "message_queue",
     )
 
     def __init__(self, name: str, pane_id: str, pid: int, cmd: list[str],
-                 hostname: str = "", cwd: str = ""):
+                 hostname: str = "", cwd: str = "", bio: str = ""):
         self.name = name
         self.pane_id = pane_id
         self.pid = pid
         self.hostname = hostname
         self.cwd = cwd
         self.cmd = cmd
+        self.bio = bio
         self.last_heartbeat: float = time.monotonic()
         self.message_queue: list[dict] = []
         pane_num = pane_id.lstrip("%")
@@ -85,6 +87,7 @@ class AgentEntry:
             "cwd": self.cwd,
             "cmd": self.cmd,
             "stream_file": str(self.stream_file),
+            "bio": self.bio,
             "started_at": self.started_at.isoformat(),
             "teams": self.teams,
         }
@@ -98,9 +101,9 @@ class AgentRegistry:
         self._pane_index: dict[str, str] = {}    # pane_id → agent_id (backward compat)
 
     def register(self, name: str, pane_id: str, pid: int, cmd: list[str],
-                 hostname: str = "", cwd: str = "") -> AgentEntry:
+                 hostname: str = "", cwd: str = "", bio: str = "") -> AgentEntry:
         entry = AgentEntry(name, pane_id, pid, cmd, hostname=hostname,
-                           cwd=cwd)
+                           cwd=cwd, bio=bio)
         agent_id = entry.agent_id
 
         # Check for re-registration (same agent_id or same pane_id)
@@ -558,6 +561,7 @@ async def handle_register(request: web.Request) -> web.Response:
             cmd=body.get("cmd", []),
             hostname=body.get("hostname", ""),
             cwd=body.get("cwd", ""),
+            bio=body.get("bio", ""),
         )
         agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
         print(f"[agentura] Registered '{entry.agent_id}' ({entry.name}) pane={entry.pane_id}")
@@ -1152,6 +1156,7 @@ async def handle_sidecar_register(request: web.Request) -> web.Response:
             cmd=body.get("cmd", []),
             hostname=body.get("hostname", ""),
             cwd=body.get("cwd", ""),
+            bio=body.get("bio", ""),
         )
         agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
         print(f"[agentura] Agent registered: '{entry.agent_id}' ({entry.name})")
@@ -1299,6 +1304,72 @@ async def handle_team_broadcast(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "recipients": recipients})
 
 
+# --- Team board endpoints ---
+
+async def handle_board_post(request: web.Request) -> web.Response:
+    """Append a note to the team board. Requires Bearer auth."""
+    team_reg: TeamRegistry = request.app["team_registry"]
+    try:
+        body = await request.json()
+        team_name = body["team_name"]
+        text = body["text"]
+        sender = body["sender"]
+    except (KeyError, json.JSONDecodeError) as e:
+        return web.json_response({"status": "error", "error": str(e)}, status=400)
+
+    team = team_reg.get(team_name)
+    if team is None:
+        return web.json_response(
+            {"status": "error", "error": f"team '{team_name}' not found"}, status=404)
+
+    if sender not in team["members"]:
+        return web.json_response(
+            {"status": "error", "error": f"'{sender}' is not a member of team '{team_name}'"}, status=403)
+
+    BOARDS_DIR.mkdir(parents=True, exist_ok=True)
+    board_file = BOARDS_DIR / f"{team_name}.jsonl"
+    entry = json.dumps({"author": sender, "text": text, "timestamp": _now()})
+    with open(board_file, "a") as f:
+        f.write(entry + "\n")
+
+    return web.json_response({"status": "ok"})
+
+
+async def handle_board_read(request: web.Request) -> web.Response:
+    """Read team board entries. Requires Bearer auth."""
+    team_reg: TeamRegistry = request.app["team_registry"]
+    team_name = request.query.get("team_name", "")
+    since = int(request.query.get("since", "0"))
+
+    if not team_name:
+        return web.json_response(
+            {"status": "error", "error": "team_name is required"}, status=400)
+
+    team = team_reg.get(team_name)
+    if team is None:
+        return web.json_response(
+            {"status": "error", "error": f"team '{team_name}' not found"}, status=404)
+
+    board_file = BOARDS_DIR / f"{team_name}.jsonl"
+    entries = []
+    if board_file.is_file():
+        lines = board_file.read_text().splitlines()
+        for line in lines[since:]:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        total = len(lines)
+    else:
+        total = 0
+
+    return web.json_response({
+        "status": "ok",
+        "entries": entries,
+        "total": total,
+    })
+
+
 # --- Skill endpoints ---
 
 async def handle_skills_list(request: web.Request) -> web.Response:
@@ -1373,6 +1444,8 @@ async def main():
     app.router.add_get("/sidecar/messages", handle_sidecar_messages)
     app.router.add_post("/sidecar/queue-message", handle_sidecar_queue_message)
     app.router.add_post("/teams/broadcast", handle_team_broadcast)
+    app.router.add_post("/teams/board", handle_board_post)
+    app.router.add_get("/teams/board", handle_board_read)
 
     runner = web.AppRunner(app)
     await runner.setup()
