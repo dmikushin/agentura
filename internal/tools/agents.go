@@ -196,7 +196,7 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 
 	// Step 2: SSH to remote host and launch agent
 	// AGENTURA_URL passed as env for compatibility; compiled-in default also works
-	windowCmd := fmt.Sprintf("AGENTURA_URL=%s AGENTURA_TOKEN=%s exec agentura-run --%s",
+	windowCmd := fmt.Sprintf("env AGENTURA_URL=%s AGENTURA_TOKEN=%s agentura-run --%s",
 		shellQuote(b.monitorURL), shellQuote(delegationToken), agentType)
 	remoteCmd := fmt.Sprintf("tmux new-window -c %s -P -F '#{pane_id}' -n %s %s",
 		shellQuote(cwd), shellQuote(agentType), shellQuote(windowCmd))

@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -68,6 +69,20 @@ func main() {
 		}
 		os.Exit(1)
 	}
+
+	// Set up file logging
+	logFile, err := os.OpenFile("agentura-run.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+		defer logFile.Close()
+	}
+	log.SetFlags(log.Ldate | log.Ltime)
+
+	log.Printf("[agent-run] Starting: %s", strings.Join(os.Args, " "))
+	log.Printf("[agent-run] CWD: %s", func() string { d, _ := os.Getwd(); return d }())
+	log.Printf("[agent-run] PID: %d", os.Getpid())
+	log.Printf("[agent-run] AGENTURA_URL=%s", os.Getenv("AGENTURA_URL"))
+	log.Printf("[agent-run] AGENTURA_TOKEN=%v", os.Getenv("AGENTURA_TOKEN") != "")
 
 	// Load .env from cwd
 	loadDotenv()
@@ -521,6 +536,8 @@ func homeDir() string {
 }
 
 func fatal(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
+	msg := fmt.Sprintf("Error: "+format, args...)
+	log.Println(msg)
+	fmt.Fprintln(os.Stderr, msg)
 	os.Exit(1)
 }
