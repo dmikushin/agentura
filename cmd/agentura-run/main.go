@@ -430,6 +430,18 @@ func ensureAgentContext(contextPath string) {
 func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	mcpPath := filepath.Join(cwd, ".mcp.json")
 
+	// Read existing config and check if agentura is already configured
+	if existing, err := os.ReadFile(mcpPath); err == nil {
+		var data map[string]interface{}
+		if json.Unmarshal(existing, &data) == nil {
+			if servers, ok := data["mcpServers"].(map[string]interface{}); ok {
+				if _, has := servers["agentura"]; has {
+					return // already configured, don't overwrite
+				}
+			}
+		}
+	}
+
 	entry := copyMap(agenturaServer)
 	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
 
@@ -463,6 +475,10 @@ func ensureGeminiMCP(cwd, monitorURL, _ string) {
 	if servers == nil {
 		servers = make(map[string]interface{})
 		data["mcpServers"] = servers
+	}
+
+	if _, exists := servers["agentura"]; exists {
+		return // already configured, don't overwrite
 	}
 
 	entry := copyMap(agenturaServer)
