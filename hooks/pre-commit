@@ -9,6 +9,10 @@ git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | while read f; d
     python3 -c "import ast; ast.parse(open('$f').read())" || exit 1
 done
 
+# Go unit tests
+echo "[pre-commit] Running Go tests..."
+go test ./... || exit 1
+
 # E2E test: requires agentura server running
 echo "[pre-commit] Running e2e tests..."
 # Load .env for AGENTURA_URL

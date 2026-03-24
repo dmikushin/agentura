@@ -12,9 +12,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["server", "mcp_server", "mcp_backend", "auth", "tmux_tools", "sidecar", "sidecar_ipc"]
+py-modules = ["server", "auth"]
 
-# agent-run and agentura-mcp are now Go binaries (see Makefile).
-# Python entry points kept only for the server and local MCP fallback.
-[project.scripts]
-agentura-mcp-py = "mcp_server:mcp.run"
+# agent-run, agentura-mcp, agentura-mcp-backend are Go binaries (see Makefile).
+# server.py stays Python (runs in Docker, no portability concern).

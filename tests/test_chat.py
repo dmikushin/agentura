@@ -24,7 +24,7 @@ import urllib.error
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 MONITOR_URL = os.environ["AGENTURA_URL"]
-AGENT_RUN = "agent-run"
+AGENT_RUN = "agentura-run"
 
 passed = 0
 failed = 0
@@ -170,10 +170,30 @@ def main():
 
         # --- Test: send_message basic ---
         print("\n[test] Basic send_message...")
-        os.environ["AGENT_ID"] = agent_a
-        from mcp_backend import send_message
-        import mcp_backend
-        mcp_backend._agent_id = agent_a
+
+        def backend_call(tool, args):
+            """Call Go agentura-mcp-backend as subprocess."""
+            import io
+            env = os.environ.copy()
+            env["AGENT_ID"] = agent_a
+            env["AGENTURA_URL"] = MONITOR_URL
+            p = subprocess.run(
+                ["agentura-mcp-backend", tool],
+                input=json.dumps(args).encode(),
+                capture_output=True, timeout=30, env=env,
+            )
+            if p.returncode != 0:
+                return f"Error: backend exit {p.returncode}: {p.stderr.decode()}"
+            resp = json.loads(p.stdout.decode())
+            return resp.get("result", resp.get("error", ""))
+
+        def send_message(target_agent_id, message, rsvp=False):
+            return backend_call("send_message", {
+                "target_agent_id": target_agent_id,
+                "message": message,
+                "rsvp": rsvp,
+            })
+
         result = send_message(
             target_agent_id=agent_b,
             message="Hello from A",
@@ -211,14 +231,17 @@ def main():
 
         # --- Test: AGENT_ID required ---
         print("\n[test] Validation...")
-        saved_id = mcp_backend._agent_id
-        mcp_backend._agent_id = None
-        result = send_message(
-            target_agent_id=agent_b,
-            message="no sender",
+        # Call backend without AGENT_ID env
+        env_no_id = os.environ.copy()
+        env_no_id["AGENTURA_URL"] = MONITOR_URL
+        env_no_id.pop("AGENT_ID", None)
+        p = subprocess.run(
+            ["agentura-mcp-backend", "send_message"],
+            input=json.dumps({"target_agent_id": agent_b, "message": "no sender"}).encode(),
+            capture_output=True, timeout=30, env=env_no_id,
         )
+        result = json.loads(p.stdout.decode()).get("result", "")
         check("missing AGENT_ID rejected", "Error" in result and "AGENT_ID" in result, result)
-        mcp_backend._agent_id = saved_id
 
         # --- Test: unknown target ---
         result = send_message(

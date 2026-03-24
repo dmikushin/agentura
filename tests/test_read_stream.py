@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 MONITOR_URL = os.environ["AGENTURA_URL"]
 MOCK_AGENT = os.path.join(os.path.dirname(__file__), "mock_agent.py")
-AGENT_RUN = "agent-run"
+AGENT_RUN = "agentura-run"
 
 passed = 0
 failed = 0
@@ -146,14 +146,24 @@ def main():
 
     # 8. Kill mock agent
     print("\n[test] Killing mock agent...")
+    # Send C-c to stop mock_agent, then kill the pane.
+    # Go sidecar catches SIGHUP on kill-pane → sends death heartbeat.
     subprocess.run(["tmux", "send-keys", "-t", pane_id, "C-c"], capture_output=True)
-    time.sleep(1)
+    time.sleep(2)
     subprocess.run(["tmux", "kill-pane", "-t", pane_id], capture_output=True)
 
     # 9. Wait for monitor to detect exit
-    time.sleep(4)
-    data = get("/agents")
-    agent_gone = all(a.get("pane_id") != pane_id for a in data.get("agents", []))
+    # Go sidecar: child dies → next loop iteration sends child_alive=false heartbeat,
+    # or SIGHUP signal handler sends final heartbeat on kill-pane.
+    # Server removes agent immediately on child_alive=false.
+    # If signal is missed, server heartbeat timeout is 30s.
+    agent_gone = False
+    for _ in range(15):
+        time.sleep(2)
+        data = get("/agents")
+        if all(a.get("pane_id") != pane_id for a in data.get("agents", [])):
+            agent_gone = True
+            break
     check("agent removed after exit", agent_gone)
 
     # 10. Read final content — agent is removed from registry so HTTP 404.

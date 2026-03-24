@@ -27,7 +27,7 @@ import urllib.error
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 MONITOR_URL = os.environ["AGENTURA_URL"]
-AGENT_RUN = "agent-run"
+AGENT_RUN = "agentura-run"
 
 passed = 0
 failed = 0
