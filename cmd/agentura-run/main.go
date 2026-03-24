@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
+
 
 	"github.com/dmikushin/agentura/internal/api"
 	"github.com/dmikushin/agentura/internal/auth"
@@ -212,8 +212,6 @@ func main() {
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
 	child.Env = os.Environ()
-	// Set process group so child can be signaled independently
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := child.Start(); err != nil {
 		fatal("failed to start %s: %v", cmdName, err)
