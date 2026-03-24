@@ -252,7 +252,7 @@ def _create_local_agent(hostname: str, cwd: str, agent_type: str,
     return f"Warning: agent launched in pane {pane_id} but not registered after 30s"
 
 
-AGENTURA_PKG = "git+https://github.com/dmikushin/agentura"
+REMOTE_BINARIES = ["agentura-run", "agentura-mcp", "agentura-mcp-backend"]
 
 
 def _ssh_run(ssh_address: str, cmd: str, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -263,28 +263,77 @@ def _ssh_run(ssh_address: str, cmd: str, timeout: int = 30) -> subprocess.Comple
     )
 
 
-def _ensure_remote_agentura(ssh_address: str) -> str | None:
-    """Ensure agentura is installed on the remote host. Returns error or None."""
+def _detect_remote_arch(hostname: str) -> str:
+    """Detect remote arch via uname -m. Returns 'linux-amd64' or 'linux-arm64'."""
+    result = _ssh_run(hostname, "uname -m", timeout=10)
+    arch = result.stdout.strip()
+    if arch == "x86_64":
+        return "linux-amd64"
+    elif arch == "aarch64":
+        return "linux-arm64"
+    raise RuntimeError(f"unsupported remote architecture: {arch}")
+
+
+def _find_bin_dir() -> Path:
+    """Locate directory with cross-compiled Go binaries."""
+    env_dir = os.environ.get("AGENTURA_BIN_DIR")
+    if env_dir:
+        return Path(env_dir)
+    # Check bin/ next to this script
+    candidate = Path(__file__).resolve().parent / "bin"
+    if candidate.is_dir():
+        return candidate
+    return Path("bin")
+
+
+def _ensure_remote_agentura(hostname: str) -> str | None:
+    """Deploy Go binaries to remote host. Returns error or None."""
+    # Check if already installed
     try:
-        result = _ssh_run(ssh_address, "which agent-run", timeout=10)
-        if result.returncode == 0:
-            return None  # already installed
+        result = _ssh_run(hostname, "which agentura-run 2>/dev/null && agentura-run --help >/dev/null 2>&1 && echo ok", timeout=10)
+        if "ok" in result.stdout:
+            return None
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    # Install
+    # Detect remote architecture
     try:
-        result = _ssh_run(
-            ssh_address,
-            f"pip install --user {shlex.quote(AGENTURA_PKG)}",
-            timeout=120,
-        )
-        if result.returncode != 0:
-            return f"pip install failed: {result.stderr.strip()}"
-    except subprocess.TimeoutExpired:
-        return "pip install timed out"
-    except FileNotFoundError:
-        return "ssh not found"
+        arch_suffix = _detect_remote_arch(hostname)
+    except Exception as e:
+        return str(e)
+
+    bin_dir = _find_bin_dir()
+
+    # Ensure ~/.local/bin exists
+    _ssh_run(hostname, "mkdir -p ~/.local/bin", timeout=10)
+
+    # Deploy each binary via scp
+    for name in REMOTE_BINARIES:
+        local_path = bin_dir / f"{name}-{arch_suffix}"
+        if not local_path.exists():
+            return f"binary not found: {local_path} (run 'make {arch_suffix}' first)"
+
+        remote_path = f"{hostname}:~/.local/bin/{name}"
+        try:
+            result = subprocess.run(
+                ["scp", "-o", "StrictHostKeyChecking=accept-new",
+                 str(local_path), remote_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                return f"scp {name} failed: {result.stderr.strip()}"
+        except subprocess.TimeoutExpired:
+            return f"scp {name} timed out"
+
+        _ssh_run(hostname, f"chmod +x ~/.local/bin/{name}", timeout=10)
+
+    # Verify
+    try:
+        result = _ssh_run(hostname, "~/.local/bin/agentura-run --help >/dev/null 2>&1 && echo ok", timeout=10)
+        if "ok" not in result.stdout:
+            return "deployed binaries don't work on remote host"
+    except Exception as e:
+        return f"verification failed: {e}"
 
     return None
 

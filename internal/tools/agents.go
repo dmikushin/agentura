@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -170,10 +171,8 @@ func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking boo
 	return fmt.Sprintf("Warning: agent launched in pane %s but not registered after 30s", paneID)
 }
 
-const agenturaPkg = "git+https://github.com/dmikushin/agentura"
-
 func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
-	// Step 0: Ensure agentura installed on remote
+	// Step 0: Deploy Go binaries to remote host
 	if err := b.ensureRemoteAgentura(hostname); err != nil {
 		return fmt.Sprintf("Error: remote setup failed (%s): %v", hostname, err)
 	}
@@ -263,16 +262,88 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 	return fmt.Sprintf("Warning: remote agent launched on %s but not registered after 30s", hostname)
 }
 
+// remoteArchSuffix detects the remote host architecture via `uname -m`
+// and returns the Go binary suffix ("linux-amd64" or "linux-arm64").
+func remoteArchSuffix(hostname string) (string, error) {
+	stdout, _, err := sshRun(hostname, "uname -m", 10*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("cannot detect remote arch: %v", err)
+	}
+	arch := strings.TrimSpace(stdout)
+	switch arch {
+	case "x86_64":
+		return "linux-amd64", nil
+	case "aarch64":
+		return "linux-arm64", nil
+	default:
+		return "", fmt.Errorf("unsupported remote architecture: %s", arch)
+	}
+}
+
+// findBinDir locates the directory containing cross-compiled Go binaries.
+// Checks: AGENTURA_BIN_DIR env → ./bin/ next to the running binary → ./bin/ in cwd.
+func findBinDir() string {
+	if d := os.Getenv("AGENTURA_BIN_DIR"); d != "" {
+		return d
+	}
+	if self, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(self), "..", "bin")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		// Also check sibling bin/
+		candidate = filepath.Join(filepath.Dir(self))
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return "bin"
+}
+
+// binaries that need to be deployed to remote hosts.
+var remoteBinaries = []string{"agentura-run", "agentura-mcp", "agentura-mcp-backend"}
+
 func (b *Backend) ensureRemoteAgentura(hostname string) error {
-	stdout, _, err := sshRun(hostname, "which agent-run", 10*time.Second)
-	if err == nil && strings.TrimSpace(stdout) != "" {
-		return nil
+	// Check if already installed (any of the 3 binaries)
+	stdout, _, err := sshRun(hostname, "which agentura-run 2>/dev/null && agentura-run --help >/dev/null 2>&1 && echo ok", 10*time.Second)
+	if err == nil && strings.Contains(stdout, "ok") {
+		return nil // already installed and working
 	}
 
-	_, stderr, err := sshRun(hostname, fmt.Sprintf("pip install --user %s", shellQuote(agenturaPkg)), 120*time.Second)
+	// Detect remote architecture
+	archSuffix, err := remoteArchSuffix(hostname)
 	if err != nil {
-		return fmt.Errorf("pip install failed: %s", strings.TrimSpace(stderr))
+		return err
 	}
+
+	binDir := findBinDir()
+
+	// Ensure ~/.local/bin exists on remote
+	sshRun(hostname, "mkdir -p ~/.local/bin", 10*time.Second)
+
+	// Deploy each binary via scp
+	for _, name := range remoteBinaries {
+		localPath := filepath.Join(binDir, name+"-"+archSuffix)
+		if _, err := os.Stat(localPath); err != nil {
+			return fmt.Errorf("binary not found: %s (run 'make %s' first)", localPath, archSuffix)
+		}
+
+		remotePath := fmt.Sprintf("%s:~/.local/bin/%s", hostname, name)
+		cmd := exec.Command("scp", "-o", "StrictHostKeyChecking=accept-new", localPath, remotePath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("scp %s failed: %s", name, strings.TrimSpace(string(out)))
+		}
+
+		// Make executable
+		sshRun(hostname, fmt.Sprintf("chmod +x ~/.local/bin/%s", name), 10*time.Second)
+	}
+
+	// Verify it works
+	stdout, _, err = sshRun(hostname, "~/.local/bin/agentura-run --help >/dev/null 2>&1 && echo ok", 10*time.Second)
+	if err != nil || !strings.Contains(stdout, "ok") {
+		return fmt.Errorf("deployed binaries don't work on remote host")
+	}
+
 	return nil
 }
 

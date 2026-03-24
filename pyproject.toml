@@ -12,8 +12,9 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["agent", "tmux_tools", "server", "mcp_server", "mcp_backend", "auth", "sidecar", "sidecar_ipc"]
+py-modules = ["server", "mcp_server", "mcp_backend", "auth", "tmux_tools", "sidecar", "sidecar_ipc"]
 
+# agent-run and agentura-mcp are now Go binaries (see Makefile).
+# Python entry points kept only for the server and local MCP fallback.
 [project.scripts]
-agent-run = "agent:main"
-agentura-mcp = "mcp_server:mcp.run"
+agentura-mcp-py = "mcp_server:mcp.run"
