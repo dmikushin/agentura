@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -177,11 +176,6 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 		return fmt.Sprintf("Error: remote setup failed (%s): %v", hostname, err)
 	}
 
-	// Step 0.5: Ensure .mcp.json in cwd
-	if err := b.ensureRemoteMCPConfig(hostname, cwd); err != nil {
-		return fmt.Sprintf("Error: remote MCP config failed (%s): %v", hostname, err)
-	}
-
 	// Step 1: Create delegation token
 	if b.agentToken == "" {
 		return "Error: no AGENT_TOKEN available (agent not registered?)"
@@ -345,27 +339,6 @@ func (b *Backend) ensureRemoteAgentura(hostname string) error {
 		return fmt.Errorf("deployed binaries don't work on remote host")
 	}
 
-	return nil
-}
-
-func (b *Backend) ensureRemoteMCPConfig(hostname, cwd string) error {
-	mcpConfig, _ := json.Marshal(map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"agentura": map[string]interface{}{
-				"command": "agentura-mcp",
-				"env": map[string]string{
-					"AGENTURA_URL": b.monitorURL,
-				},
-			},
-		},
-	})
-
-	cmd := fmt.Sprintf("test -f %s/.mcp.json || echo %s > %s/.mcp.json",
-		shellQuote(cwd), shellQuote(string(mcpConfig)), shellQuote(cwd))
-	_, stderr, err := sshRun(hostname, cmd, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("failed to create .mcp.json: %s", strings.TrimSpace(stderr))
-	}
 	return nil
 }
 

@@ -189,15 +189,19 @@ func main() {
 	}
 
 	// --- Deploy skills ---
-	deploySkills(monitorURL, authToken)
+	deploySkills(cmdName, monitorURL, authToken)
 
 	// --- Clear nesting guards ---
 	os.Unsetenv("CLAUDECODE")
 	os.Unsetenv("CLAUDE_CODE_ENTRYPOINT")
 
-	// --- Pre-trust cwd for Claude ---
-	if cmdName == "claude" {
+	// --- Ensure MCP config ---
+	switch cmdName {
+	case "claude":
+		ensureClaudeMCP(cwd, monitorURL)
 		ensureClaudeTrust(cwd)
+	case "gemini":
+		ensureGeminiMCP(cwd, monitorURL)
 	}
 
 	// --- Set up IPC socket path ---
@@ -266,11 +270,12 @@ func loadDotenv() {
 	}
 }
 
-func deploySkills(monitorURL, token string) {
+func deploySkills(cmdName, monitorURL, token string) {
 	client := api.NewClient(monitorURL, token)
 
 	resp, err := client.Get("/skills")
 	if err != nil {
+		log.Printf("[agent-run] Warning: failed to fetch skills: %v", err)
 		return
 	}
 	skillsRaw, ok := resp["skills"]
@@ -282,28 +287,124 @@ func deploySkills(monitorURL, token string) {
 		return
 	}
 
-	cwdSkills := filepath.Join(".", ".claude", "commands")
-	os.MkdirAll(cwdSkills, 0755)
-
 	for _, s := range skills {
 		skillName, ok := s.(string)
 		if !ok {
 			continue
-		}
-		dst := filepath.Join(cwdSkills, skillName)
-		if _, err := os.Stat(dst); err == nil {
-			continue // already exists
 		}
 		skillResp, err := client.Get("/skills/" + skillName)
 		if err != nil {
 			continue
 		}
 		content, _ := skillResp["content"].(string)
-		if content != "" {
-			os.WriteFile(dst, []byte(content), 0644)
-			log.Printf("[agent-run] Deployed skill: %s", skillName)
+		if content == "" {
+			continue
+		}
+
+		switch cmdName {
+		case "gemini":
+			deployGeminiSkill(skillName, content)
+		default:
+			deployClaudeSkill(skillName, content)
 		}
 	}
+}
+
+func deployClaudeSkill(skillName, content string) {
+	dir := filepath.Join(".", ".claude", "commands")
+	os.MkdirAll(dir, 0755)
+	dst := filepath.Join(dir, skillName)
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	os.WriteFile(dst, []byte(content), 0644)
+	log.Printf("[agent-run] Deployed skill: %s", dst)
+}
+
+func deployGeminiSkill(skillName, content string) {
+	// Strip .md extension for directory name
+	name := strings.TrimSuffix(skillName, ".md")
+	dir := filepath.Join(".", ".gemini", "skills", name)
+	dst := filepath.Join(dir, "SKILL.md")
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	os.MkdirAll(dir, 0755)
+
+	// Wrap content in SKILL.md format with YAML frontmatter
+	skill := fmt.Sprintf("---\nname: %s\ndescription: Agentura skill — %s\n---\n\n%s", name, name, content)
+	os.WriteFile(dst, []byte(skill), 0644)
+	log.Printf("[agent-run] Deployed skill: %s", dst)
+}
+
+var agenturaServer = map[string]interface{}{
+	"command": "agentura-mcp",
+}
+
+func ensureClaudeMCP(cwd, monitorURL string) {
+	mcpPath := filepath.Join(cwd, ".mcp.json")
+	if _, err := os.Stat(mcpPath); err == nil {
+		return // already exists
+	}
+
+	entry := copyMap(agenturaServer)
+	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+
+	mcpConfig := map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"agentura": entry,
+		},
+	}
+
+	raw, _ := json.MarshalIndent(mcpConfig, "", "  ")
+	if err := os.WriteFile(mcpPath, raw, 0644); err != nil {
+		log.Printf("[agent-run] Warning: failed to create .mcp.json: %v", err)
+		return
+	}
+	log.Printf("[agent-run] Created MCP config: %s", mcpPath)
+}
+
+func ensureGeminiMCP(cwd, monitorURL string) {
+	geminiDir := filepath.Join(cwd, ".gemini")
+	configPath := filepath.Join(geminiDir, "settings.json")
+
+	var data map[string]interface{}
+	if raw, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(raw, &data)
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	servers, _ := data["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = make(map[string]interface{})
+		data["mcpServers"] = servers
+	}
+
+	if _, exists := servers["agentura"]; exists {
+		return // already configured
+	}
+
+	entry := copyMap(agenturaServer)
+	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+	servers["agentura"] = entry
+
+	os.MkdirAll(geminiDir, 0755)
+	raw, _ := json.MarshalIndent(data, "", "  ")
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		log.Printf("[agent-run] Warning: failed to create gemini MCP config: %v", err)
+		return
+	}
+	log.Printf("[agent-run] Created MCP config: %s", configPath)
+}
+
+func copyMap(m map[string]interface{}) map[string]interface{} {
+	cp := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }
 
 func ensureClaudeTrust(cwd string) {
