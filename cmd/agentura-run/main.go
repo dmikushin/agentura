@@ -109,6 +109,9 @@ func main() {
 
 	bearerToken, err = auth.Authenticate(monitorURL)
 	if err != nil {
+		if delegationToken == "" {
+			fatal("%v\nConfigure IdentityFile in ~/.ssh/config or start ssh-agent", err)
+		}
 		log.Printf("[agent-run] Warning: SSH auth failed: %v", err)
 	} else if bearerToken != "" {
 		log.Printf("[agent-run] Authenticated with SSH key")
@@ -117,7 +120,7 @@ func main() {
 	if bearerToken == "" && delegationToken != "" {
 		log.Printf("[agent-run] Using delegation token (AGENTURA_TOKEN)")
 	} else if bearerToken == "" && delegationToken == "" {
-		log.Printf("[agent-run] Warning: no auth available, proceeding without monitoring")
+		fatal("no authentication available — configure IdentityFile in ~/.ssh/config or start ssh-agent")
 	}
 
 	// --- Register with server ---

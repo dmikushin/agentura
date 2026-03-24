@@ -6,7 +6,6 @@ import (
 )
 
 func TestReadString(t *testing.T) {
-	// Build a wire-format string: length (4 bytes big-endian) + content
 	content := []byte("ssh-ed25519")
 	data := make([]byte, 4+len(content))
 	binary.BigEndian.PutUint32(data[0:4], uint32(len(content)))
@@ -25,7 +24,6 @@ func TestReadString(t *testing.T) {
 }
 
 func TestReadStringShortBuffer(t *testing.T) {
-	// Only 2 bytes — not enough for length prefix
 	_, _, err := readString([]byte{0x00, 0x01}, 0)
 	if err == nil {
 		t.Error("readString should error on short buffer")
@@ -33,7 +31,6 @@ func TestReadStringShortBuffer(t *testing.T) {
 }
 
 func TestReadStringOverflow(t *testing.T) {
-	// Length says 100 bytes but only 5 available
 	data := make([]byte, 9)
 	binary.BigEndian.PutUint32(data[0:4], 100)
 	_, _, err := readString(data, 0)
@@ -58,7 +55,6 @@ func TestAppendString(t *testing.T) {
 }
 
 func TestNewSSHAgentClientNoSocket(t *testing.T) {
-	// Temporarily unset SSH_AUTH_SOCK
 	t.Setenv("SSH_AUTH_SOCK", "")
 	_, err := NewSSHAgentClient()
 	if err == nil {
