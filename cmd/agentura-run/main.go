@@ -195,18 +195,18 @@ func main() {
 	os.Unsetenv("CLAUDECODE")
 	os.Unsetenv("CLAUDE_CODE_ENTRYPOINT")
 
-	// --- Ensure MCP config ---
-	switch cmdName {
-	case "claude":
-		ensureClaudeMCP(cwd, monitorURL)
-		ensureClaudeTrust(cwd)
-	case "gemini":
-		ensureGeminiMCP(cwd, monitorURL)
-	}
-
 	// --- Set up IPC socket path ---
 	sockPath := fmt.Sprintf("/tmp/agentura-sidecar-%d.sock", os.Getpid())
 	os.Setenv("AGENTURA_SIDECAR_SOCK", sockPath)
+
+	// --- Ensure MCP config ---
+	switch cmdName {
+	case "claude":
+		ensureClaudeMCP(cwd, monitorURL, sockPath)
+		ensureClaudeTrust(cwd)
+	case "gemini":
+		ensureGeminiMCP(cwd, monitorURL, sockPath)
+	}
 
 	// --- Launch child subprocess, main goroutine becomes sidecar ---
 	// Go can't fork() safely. Instead: start child as subprocess,
@@ -341,11 +341,8 @@ var agenturaServer = map[string]interface{}{
 	"command": "agentura-mcp",
 }
 
-func ensureClaudeMCP(cwd, monitorURL string) {
+func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	mcpPath := filepath.Join(cwd, ".mcp.json")
-	if _, err := os.Stat(mcpPath); err == nil {
-		return // already exists
-	}
 
 	entry := copyMap(agenturaServer)
 	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
@@ -364,7 +361,7 @@ func ensureClaudeMCP(cwd, monitorURL string) {
 	log.Printf("[agent-run] Created MCP config: %s", mcpPath)
 }
 
-func ensureGeminiMCP(cwd, monitorURL string) {
+func ensureGeminiMCP(cwd, monitorURL, _ string) {
 	geminiDir := filepath.Join(cwd, ".gemini")
 	configPath := filepath.Join(geminiDir, "settings.json")
 
@@ -380,10 +377,6 @@ func ensureGeminiMCP(cwd, monitorURL string) {
 	if servers == nil {
 		servers = make(map[string]interface{})
 		data["mcpServers"] = servers
-	}
-
-	if _, exists := servers["agentura"]; exists {
-		return // already configured
 	}
 
 	entry := copyMap(agenturaServer)
