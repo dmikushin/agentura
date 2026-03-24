@@ -493,6 +493,7 @@ async def capture_loop(registry: AgentRegistry, team_registry: TeamRegistry, shu
                 print(f"[agentura] Agent '{entry.name}' heartbeat timeout ({elapsed:.0f}s)")
                 _append_to_stream(entry.stream_file,
                                   f"\n---\n*Agent heartbeat timeout at {_now()}*\n")
+                _notify_agent_exit(registry, entry)
                 successions = team_registry.handle_agent_exit(entry.agent_id)
                 registry.remove(entry.agent_id)
                 for info in successions:
@@ -531,6 +532,21 @@ async def capture_loop(registry: AgentRegistry, team_registry: TeamRegistry, shu
 
 
 # --- HTTP handlers ---
+
+def _notify_agent_exit(registry: AgentRegistry, exiting: AgentEntry):
+    """Notify all team members that an agent has disconnected."""
+    for team_name in exiting.teams:
+        team = registry  # just need to iterate agents
+        for entry in registry.agents.values():
+            if entry.agent_id == exiting.agent_id:
+                continue
+            if team_name in entry.teams:
+                entry.message_queue.append({
+                    "text": f"Agentura notification: Agent {exiting.agent_id} ({exiting.name}) has disconnected from team '{team_name}'.",
+                    "sender": "agentura",
+                    "timestamp": _now(),
+                })
+
 
 async def _notify_agent(registry: AgentRegistry, agent_id: str, message: str):
     """Queue a notification for an agent (delivered by sidecar)."""
@@ -1204,6 +1220,7 @@ async def handle_sidecar_heartbeat(request: web.Request) -> web.Response:
         print(f"[agentura] Agent '{entry.name}' reported child dead")
         _append_to_stream(entry.stream_file,
                           f"\n---\n*Agent exited at {_now()}*\n")
+        _notify_agent_exit(registry, entry)
         successions = team_registry.handle_agent_exit(entry.agent_id)
         registry.remove(entry.agent_id)
         for info in successions:

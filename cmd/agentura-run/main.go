@@ -225,6 +225,7 @@ func main() {
 		ensureAgentContext(filepath.Join(cwd, ".claude", "CLAUDE.md"))
 	case "gemini":
 		ensureGeminiMCP(cwd, monitorURL, sockPath)
+		ensureGeminiTrust(cwd)
 		ensureAgentContext(filepath.Join(cwd, ".gemini", "GEMINI.md"))
 	}
 
@@ -444,7 +445,7 @@ func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	log.Printf("[agent-run] Created MCP config: %s", mcpPath)
 }
 
-func ensureGeminiMCP(cwd, monitorURL, _ string) {
+func ensureGeminiMCP(cwd, monitorURL, sockPath string) {
 	geminiDir := filepath.Join(cwd, ".gemini")
 	configPath := filepath.Join(geminiDir, "settings.json")
 
@@ -463,7 +464,13 @@ func ensureGeminiMCP(cwd, monitorURL, _ string) {
 	}
 
 	entry := copyMap(agenturaServer)
-	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+	// Gemini's sanitizeEnvironment filters env vars matching /TOKEN/i,
+	// which strips AGENT_TOKEN. Explicitly pass AGENTURA_SIDECAR_SOCK
+	// so the MCP backend can use sidecar IPC (which handles token injection).
+	entry["env"] = map[string]string{
+		"AGENTURA_URL":          monitorURL,
+		"AGENTURA_SIDECAR_SOCK": sockPath,
+	}
 	servers["agentura"] = entry
 
 	os.MkdirAll(geminiDir, 0755)
@@ -473,6 +480,41 @@ func ensureGeminiMCP(cwd, monitorURL, _ string) {
 		return
 	}
 	log.Printf("[agent-run] Created MCP config: %s", configPath)
+}
+
+func ensureGeminiTrust(cwd string) {
+	geminiDir := filepath.Join(cwd, ".gemini")
+	configPath := filepath.Join(geminiDir, "settings.json")
+
+	var data map[string]interface{}
+	if raw, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(raw, &data)
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// Ensure security.folderTrust.enabled = false so -y (YOLO) works
+	security, _ := data["security"].(map[string]interface{})
+	if security == nil {
+		security = make(map[string]interface{})
+		data["security"] = security
+	}
+	folderTrust, _ := security["folderTrust"].(map[string]interface{})
+	if folderTrust == nil {
+		folderTrust = make(map[string]interface{})
+		security["folderTrust"] = folderTrust
+	}
+
+	if enabled, ok := folderTrust["enabled"].(bool); ok && !enabled {
+		return // already disabled
+	}
+	folderTrust["enabled"] = false
+
+	os.MkdirAll(geminiDir, 0755)
+	raw, _ := json.MarshalIndent(data, "", "  ")
+	os.WriteFile(configPath, raw, 0644)
+	log.Printf("[agent-run] Disabled Gemini folderTrust in %s", configPath)
 }
 
 func copyMap(m map[string]interface{}) map[string]interface{} {
