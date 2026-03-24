@@ -670,40 +670,29 @@ async def auth_middleware(request: web.Request, handler):
     auth_header = request.headers.get("Authorization", "")
     auth_store: AuthSessionStore = request.app["auth_store"]
 
-    # Sidecar endpoints accept delegation tokens, bearer tokens, and agent tokens
-    if request.path.startswith("/sidecar/"):
-        if not auth_header.startswith("Bearer "):
-            return web.json_response(
-                {"status": "error", "error": "missing Authorization header"}, status=401)
-        token = auth_header[7:]
-        # Try delegation token first
-        delegation_info = auth_store.validate_delegation_token(token)
-        if delegation_info is not None:
-            request["delegation_info"] = delegation_info
-            return await handler(request)
-        # Also accept regular bearer token (for queue-message from local agents)
-        valid = auth_store.validate_token(token)
-        if valid is not None:
-            return await handler(request)
-        # Also accept agent tokens
-        agent_id = auth_store.validate_agent_token(token)
-        if agent_id is not None:
-            return await handler(request)
-        return web.json_response(
-            {"status": "error", "error": "invalid or expired token"}, status=401)
-
-    # Regular endpoints: check Bearer token
+    # All endpoints accept bearer tokens, delegation tokens, and agent tokens
     if not auth_header.startswith("Bearer "):
         return web.json_response(
             {"status": "error", "error": "missing Authorization header"}, status=401)
 
     token = auth_header[7:]
-    valid = auth_store.validate_token(token)
-    if valid is None:
-        return web.json_response(
-            {"status": "error", "error": "invalid or expired token"}, status=401)
 
-    return await handler(request)
+    # Try delegation token
+    delegation_info = auth_store.validate_delegation_token(token)
+    if delegation_info is not None:
+        request["delegation_info"] = delegation_info
+        return await handler(request)
+
+    # Try bearer token (from SSH auth)
+    if auth_store.validate_token(token) is not None:
+        return await handler(request)
+
+    # Try agent token
+    if auth_store.validate_agent_token(token) is not None:
+        return await handler(request)
+
+    return web.json_response(
+        {"status": "error", "error": "invalid or expired token"}, status=401)
 
 
 # --- Team endpoints ---
