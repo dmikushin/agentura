@@ -177,6 +177,13 @@ func main() {
 		agentID = fmt.Sprintf("%s@%s:%d", hostname, cwd, os.Getpid())
 	}
 
+	// --- Signal readiness via file (for tests and orchestration) ---
+	if readyFile := os.Getenv("AGENTURA_READY_FILE"); readyFile != "" {
+		if err := os.WriteFile(readyFile, []byte(agentID), 0644); err != nil {
+			log.Printf("[agent-run] Warning: failed to write ready file %s: %v", readyFile, err)
+		}
+	}
+
 	// --- Deploy skills ---
 	deploySkills(monitorURL, authToken)
 

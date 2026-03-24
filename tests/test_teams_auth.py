@@ -25,9 +25,11 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from helpers import launch_agent as _launch_agent, wait_for_pane_contains
 
 MONITOR_URL = os.environ["AGENTURA_URL"]
-AGENT_RUN = "agentura-run"
 
 passed = 0
 failed = 0
@@ -109,27 +111,8 @@ def capture_pane(pane_id, lines=30):
 
 
 def launch_mock_agent(name, cwd="/tmp"):
-    """Launch cat as a mock agent via agent-run."""
-    result = subprocess.run(
-        ["tmux", "new-window", "-P", "-F", "#{pane_id}", "-n", name,
-         f"cd {cwd} && AGENTURA_URL={MONITOR_URL} exec {AGENT_RUN} cat"],
-        capture_output=True, text=True, timeout=5,
-    )
-    pane_id = result.stdout.strip()
-    if result.returncode != 0 or not pane_id:
-        return None, None, None
-
-    # Wait for registration
-    agent_id = None
-    for _ in range(10):
-        time.sleep(1)
-        data = get("/agents")
-        for a in data.get("agents", []):
-            if a.get("pane_id") == pane_id:
-                agent_id = a["agent_id"]
-                break
-        if agent_id:
-            break
+    """Launch cat as a mock agent via agentura-run (ready-file sync)."""
+    pane_id, agent_id = _launch_agent(name, MONITOR_URL, cmd="cat", cwd=cwd)
 
     # Get agent_token by refreshing
     agent_token = None
@@ -226,8 +209,7 @@ def main():
                 break
 
         # Check owner got notification
-        time.sleep(3)  # wait for sidecar poll
-        pane_content_a = capture_pane(pane_a)
+        pane_content_a = wait_for_pane_contains(pane_a, "Join request") or ""
         check("owner sees [SYSTEM] notification",
               "[SYSTEM]" in pane_content_a and "Join request" in pane_content_a,
               pane_content_a[-200:])
@@ -269,8 +251,7 @@ def main():
               str(resp.get("pending")))
 
         # Check B got approval notification
-        time.sleep(3)  # wait for sidecar poll
-        pane_content_b = capture_pane(pane_b)
+        pane_content_b = wait_for_pane_contains(pane_b, "APPROVED") or ""
         check("B sees APPROVED notification",
               "[SYSTEM]" in pane_content_b and "APPROVED" in pane_content_b,
               pane_content_b[-200:])
@@ -303,8 +284,7 @@ def main():
                     break
 
             # Check C got denial notification
-            time.sleep(3)  # wait for sidecar poll
-            pane_content_c = capture_pane(pane_c)
+            pane_content_c = wait_for_pane_contains(pane_c, "DENIED") or ""
             check("C sees DENIED notification",
                   "[SYSTEM]" in pane_content_c and "DENIED" in pane_content_c,
                   pane_content_c[-200:])
@@ -320,8 +300,7 @@ def main():
         check("add_admin succeeds", resp.get("status") == "ok", str(resp))
 
         # Check B got admin notification
-        time.sleep(3)  # wait for sidecar poll
-        pane_content_b = capture_pane(pane_b)
+        pane_content_b = wait_for_pane_contains(pane_b, "ADMIN:") or ""
         check("B sees ADMIN notification",
               "[SYSTEM]" in pane_content_b and "ADMIN:" in pane_content_b,
               pane_content_b[-200:])
@@ -392,8 +371,7 @@ def main():
         check("remove_admin succeeds", resp.get("status") == "ok", str(resp))
 
         # Check B got admin revoked notification
-        time.sleep(3)  # wait for sidecar poll
-        pane_content_b = capture_pane(pane_b)
+        pane_content_b = wait_for_pane_contains(pane_b, "ADMIN_REVOKED") or ""
         check("B sees ADMIN_REVOKED notification",
               "[SYSTEM]" in pane_content_b and "ADMIN_REVOKED" in pane_content_b,
               pane_content_b[-200:])
@@ -434,8 +412,7 @@ def main():
                 break
 
         # Check all members got TRANSFER notification
-        time.sleep(3)  # wait for sidecar poll
-        pane_content_a = capture_pane(pane_a)
+        pane_content_a = wait_for_pane_contains(pane_a, "TRANSFER") or ""
         check("A sees TRANSFER notification",
               "[SYSTEM]" in pane_content_a and "TRANSFER" in pane_content_a,
               pane_content_a[-200:])
@@ -645,17 +622,23 @@ def main():
             elif current_owner_pane == pane_c:
                 pane_c = None
 
-            # Wait for sidecar death heartbeat and server processing
-            time.sleep(8)
-
-            resp = get("/teams")
+            # Poll until owner changes (heartbeat timeout → succession)
+            owner_changed = False
             found_team = False
-            for t in resp.get("teams", []):
-                if t["name"] == team_name:
-                    found_team = True
-                    check("owner changed after exit", t["owner"] != current_owner_id,
-                          f"owner={t.get('owner')}")
+            deadline = time.monotonic() + 35
+            while time.monotonic() < deadline:
+                time.sleep(1)
+                resp = get("/teams")
+                for t in resp.get("teams", []):
+                    if t["name"] == team_name:
+                        found_team = True
+                        if t["owner"] != current_owner_id:
+                            owner_changed = True
+                        break
+                if owner_changed:
                     break
+            check("owner changed after exit", owner_changed,
+                  f"owner still={current_owner_id}")
             check("team still exists after owner exit", found_team)
 
     finally:

@@ -3,14 +3,6 @@
 test_chat.py — end-to-end tests for agent-to-agent messaging.
 
 Prerequisites: docker compose up -d (agentura server running)
-
-Tests:
-1. send_message delivers text to target pane
-2. Message is prefixed with [sender_agent_id]
-3. rsvp=True sends /rsvp command after the message
-4. sender_agent_id is required
-5. Error on unknown target
-6. Skill deployment via agent-run
 """
 
 import json
@@ -22,9 +14,11 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from helpers import launch_agent, wait_for_pane_contains, capture_pane
 
 MONITOR_URL = os.environ["AGENTURA_URL"]
-AGENT_RUN = "agentura-run"
 
 passed = 0
 failed = 0
@@ -75,21 +69,11 @@ def post(path, data):
         return json.loads(resp.read().decode())
 
 
-def capture_pane(pane_id, lines=30):
-    result = subprocess.run(
-        ["tmux", "capture-pane", "-pt", pane_id, "-S", f"-{lines}"],
-        capture_output=True, text=True, timeout=5,
-    )
-    return result.stdout if result.returncode == 0 else f"[CAPTURE FAILED rc={result.returncode} stderr={result.stderr}]"
-
-
 def dump_pane(label, pane_id):
-    """Print full pane content for diagnostics."""
-    content = capture_pane(pane_id)
-    # Strip trailing empty lines for readability
+    content = capture_pane(pane_id) or ""
     stripped = content.rstrip("\n")
     print(f"  [{label}] pane {pane_id} content:")
-    for line in stripped.split("\n")[-15:]:  # last 15 lines
+    for line in stripped.split("\n")[-15:]:
         print(f"    | {line}")
 
 
@@ -101,35 +85,34 @@ def dump_all_panes():
     print(f"  [tmux panes] {result.stdout.strip()}")
 
 
-def launch_mock_agent(name, cwd="/tmp"):
-    """Launch cat as a mock agent (accepts input without executing it)."""
-    result = subprocess.run(
-        ["tmux", "new-window", "-P", "-F", "#{pane_id}", "-n", name,
-         f"cd {cwd} && AGENTURA_URL={MONITOR_URL} exec {AGENT_RUN} cat"],
-        capture_output=True, text=True, timeout=5,
-    )
-    pane_id = result.stdout.strip()
-    if result.returncode != 0 or not pane_id:
-        return None, None
-
-    # Wait for registration
-    agent_id = None
-    for _ in range(10):
-        time.sleep(1)
-        data = get("/agents")
-        for a in data.get("agents", []):
-            if a.get("pane_id") == pane_id:
-                agent_id = a["agent_id"]
-                break
-        if agent_id:
-            break
-
-    return pane_id, agent_id
-
-
 def kill_pane(pane_id):
     if pane_id:
         subprocess.run(["tmux", "kill-pane", "-t", pane_id], capture_output=True)
+
+
+def backend_call(tool, args, agent_id=None, env_override=None):
+    """Call Go agentura-mcp-backend as subprocess."""
+    env = env_override if env_override else os.environ.copy()
+    if agent_id:
+        env["AGENT_ID"] = agent_id
+    env["AGENTURA_URL"] = MONITOR_URL
+    p = subprocess.run(
+        ["agentura-mcp-backend", tool],
+        input=json.dumps(args).encode(),
+        capture_output=True, timeout=30, env=env,
+    )
+    if p.returncode != 0:
+        return f"Error: backend exit {p.returncode}: {p.stderr.decode()}"
+    resp = json.loads(p.stdout.decode())
+    return resp.get("result", resp.get("error", ""))
+
+
+def send_message(agent_id, target_agent_id, message, rsvp=False):
+    return backend_call("send_message", {
+        "target_agent_id": target_agent_id,
+        "message": message,
+        "rsvp": rsvp,
+    }, agent_id=agent_id)
 
 
 def main():
@@ -139,7 +122,6 @@ def main():
 
     print("=== test_chat.py ===\n")
 
-    # 0. Check monitor
     try:
         get("/agents")
     except urllib.error.URLError:
@@ -150,13 +132,13 @@ def main():
     agent_a = agent_b = None
 
     try:
-        # 1. Launch two bash agents
+        # 1. Launch two agents (synchronized via ready-file)
         print("[setup] Launching agent A...")
-        pane_a, agent_a = launch_mock_agent("agent-a")
+        pane_a, agent_a = launch_agent("agent-a", MONITOR_URL)
         check("agent A registered", agent_a is not None)
 
         print("[setup] Launching agent B...")
-        pane_b, agent_b = launch_mock_agent("agent-b")
+        pane_b, agent_b = launch_agent("agent-b", MONITOR_URL)
         check("agent B registered", agent_b is not None)
 
         if not agent_a or not agent_b:
@@ -170,84 +152,44 @@ def main():
 
         # --- Test: send_message basic ---
         print("\n[test] Basic send_message...")
-
-        def backend_call(tool, args):
-            """Call Go agentura-mcp-backend as subprocess."""
-            import io
-            env = os.environ.copy()
-            env["AGENT_ID"] = agent_a
-            env["AGENTURA_URL"] = MONITOR_URL
-            p = subprocess.run(
-                ["agentura-mcp-backend", tool],
-                input=json.dumps(args).encode(),
-                capture_output=True, timeout=30, env=env,
-            )
-            if p.returncode != 0:
-                return f"Error: backend exit {p.returncode}: {p.stderr.decode()}"
-            resp = json.loads(p.stdout.decode())
-            return resp.get("result", resp.get("error", ""))
-
-        def send_message(target_agent_id, message, rsvp=False):
-            return backend_call("send_message", {
-                "target_agent_id": target_agent_id,
-                "message": message,
-                "rsvp": rsvp,
-            })
-
-        result = send_message(
-            target_agent_id=agent_b,
-            message="Hello from A",
-        )
+        result = send_message(agent_a, agent_b, "Hello from A")
         check("send_message returns success", "sent" in result, result)
 
-        time.sleep(3)  # wait for sidecar poll cycle (2s)
+        # Wait for message to appear in B's pane (poll, not sleep)
+        pane_content = wait_for_pane_contains(pane_b, "Hello from A")
         dump_pane("B after basic send", pane_b)
-        pane_content = capture_pane(pane_b)
-        check("message appeared in B's pane",
-              "Hello from A" in pane_content,
-              pane_content[-200:])
+        check("message appeared in B's pane", pane_content is not None,
+              (capture_pane(pane_b) or "")[-200:])
         check("sender_id prefix present",
-              f"Agent {agent_a} says to you:" in pane_content,
-              pane_content[-200:])
+              pane_content and f"Agent {agent_a} says to you:" in pane_content,
+              (pane_content or "")[-200:])
 
         # --- Test: rsvp mode ---
         print("\n[test] RSVP mode...")
-        result = send_message(
-            target_agent_id=agent_b,
-            message="Need status update",
-            rsvp=True,
-        )
+        result = send_message(agent_a, agent_b, "Need status update", rsvp=True)
         check("rsvp send returns success", "RSVP" in result, result)
 
-        time.sleep(3)  # wait for sidecar poll cycle
+        pane_content = wait_for_pane_contains(pane_b, "/rsvp")
         dump_pane("B after rsvp send", pane_b)
-        pane_content = capture_pane(pane_b)
         check("rsvp message appeared",
-              "Need status update" in pane_content,
-              pane_content[-200:])
+              pane_content and "Need status update" in pane_content,
+              (pane_content or "")[-200:])
         check("/rsvp command appeared",
-              f"/rsvp {agent_a}" in pane_content,
-              pane_content[-300:])
+              pane_content and f"/rsvp {agent_a}" in pane_content,
+              (pane_content or "")[-300:])
 
         # --- Test: AGENT_ID required ---
         print("\n[test] Validation...")
-        # Call backend without AGENT_ID env
         env_no_id = os.environ.copy()
         env_no_id["AGENTURA_URL"] = MONITOR_URL
         env_no_id.pop("AGENT_ID", None)
-        p = subprocess.run(
-            ["agentura-mcp-backend", "send_message"],
-            input=json.dumps({"target_agent_id": agent_b, "message": "no sender"}).encode(),
-            capture_output=True, timeout=30, env=env_no_id,
-        )
-        result = json.loads(p.stdout.decode()).get("result", "")
+        result = backend_call("send_message",
+                              {"target_agent_id": agent_b, "message": "no sender"},
+                              env_override=env_no_id)
         check("missing AGENT_ID rejected", "Error" in result and "AGENT_ID" in result, result)
 
         # --- Test: unknown target ---
-        result = send_message(
-            target_agent_id="nobody@nowhere:0",
-            message="hello",
-        )
+        result = send_message(agent_a, "nobody@nowhere:0", "hello")
         check("unknown target rejected", "not found" in result, result)
 
         # --- Test: Gemini '!' sanitization ---
@@ -255,18 +197,17 @@ def main():
         gemini_id = None
         result_g = subprocess.run(
             ["tmux", "new-window", "-P", "-F", "#{pane_id}", "-n", "gemini-test",
-             f"cd /tmp && AGENTURA_URL={MONITOR_URL} exec {AGENT_RUN} cat"],
+             f"cd /tmp && AGENTURA_URL={MONITOR_URL} exec agentura-run cat"],
             capture_output=True, text=True, timeout=5,
         )
         pane_g = result_g.stdout.strip()
         print(f"  [gemini] created pane {pane_g}, rc={result_g.returncode}")
         if pane_g:
-            time.sleep(3)
+            # Wait for sidecar to start (poll pane for "[sidecar]" message)
+            wait_for_pane_contains(pane_g, "[sidecar]")
             dump_pane("gemini after create", pane_g)
             dump_all_panes()
 
-            # Wait for agent to register
-            gemini_pid = None
             pid_result = subprocess.run(
                 ["tmux", "display-message", "-t", pane_g, "-p", "#{pane_pid}"],
                 capture_output=True, text=True, timeout=5,
@@ -274,7 +215,7 @@ def main():
             gemini_pid = int(pid_result.stdout.strip()) if pid_result.returncode == 0 else 1
             print(f"  [gemini] pane_pid={gemini_pid}")
 
-            # Register as "gemini" name by re-registering with correct name
+            # Register as "gemini" name
             post("/register", {
                 "agent_name": "gemini",
                 "pane_id": pane_g,
@@ -291,22 +232,18 @@ def main():
         check("gemini agent registered", gemini_id is not None)
 
         if gemini_id:
-            result = send_message(
-                target_agent_id=gemini_id,
-                message="Great job! Well done!",
-            )
+            result = send_message(agent_a, gemini_id, "Great job! Well done!")
             check("send to gemini succeeds", "sent" in result, result)
 
-            time.sleep(3)  # wait for sidecar poll cycle
+            pane_content = wait_for_pane_contains(pane_g, "Great job")
             dump_pane("gemini after send", pane_g)
-            pane_content = capture_pane(pane_g)
             check("exclamation marks replaced",
-                  "!" not in pane_content.split("Great job")[-1]
-                  if "Great job" in pane_content else False,
-                  pane_content[-200:])
+                  pane_content and "!" not in pane_content.split("Great job")[-1]
+                  if pane_content and "Great job" in pane_content else False,
+                  (pane_content or "")[-200:])
             check("message still readable",
-                  "Great job" in pane_content,
-                  pane_content[-200:])
+                  pane_content and "Great job" in pane_content,
+                  (pane_content or "")[-200:])
 
         # --- Test: skill deployment ---
         print("\n[test] Skill deployment...")
