@@ -139,7 +139,29 @@ func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking boo
 	shellCmd := fmt.Sprintf("env AGENTURA_URL=%s agentura-run --%s",
 		shellQuote(b.monitorURL), agentType)
 
-	result, err := exec.Command("tmux", "new-window", "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType, shellCmd).Output()
+	// If team is specified, create/reuse a tmux session named after the team
+	tmuxArgs := []string{"new-window", "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType}
+	if team != "" {
+		// Create session if it doesn't exist (ignore error if it already exists)
+		exec.Command("tmux", "new-session", "-d", "-s", team, "-c", cwd, "-n", agentType, shellCmd).Run()
+		// Check if the session was just created (first agent) or already existed
+		checkResult, _ := exec.Command("tmux", "list-windows", "-t", team, "-F", "#{window_name}").Output()
+		if strings.Contains(string(checkResult), agentType) {
+			// Session was just created with first window — get its pane_id
+			paneResult, err := exec.Command("tmux", "display-message", "-t", team, "-p", "#{pane_id}").Output()
+			if err == nil && len(strings.TrimSpace(string(paneResult))) > 0 {
+				paneID := strings.TrimSpace(string(paneResult))
+				newAgentID := b.waitForRegistration(paneID, blocking)
+				teamMsg := b.handleTeamAssignment(newAgentID, team, senderAgentID)
+				return b.formatCreatedAgent(newAgentID, teamMsg, paneID, agentType, blocking, "")
+			}
+		}
+		// Session exists, add window to it
+		tmuxArgs = []string{"new-window", "-t", team, "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType}
+	}
+
+	tmuxArgs = append(tmuxArgs, shellCmd)
+	result, err := exec.Command("tmux", tmuxArgs...).Output()
 	if err != nil {
 		return fmt.Sprintf("Error: failed to create tmux window: %v", err)
 	}
@@ -147,27 +169,7 @@ func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking boo
 	paneID := strings.TrimSpace(string(result))
 	newAgentID := b.waitForRegistration(paneID, blocking)
 	teamMsg := b.handleTeamAssignment(newAgentID, team, senderAgentID)
-
-	if newAgentID != "" {
-		data, err := b.get("/agents")
-		if err == nil {
-			agents, _ := data["agents"].([]interface{})
-			for _, a := range agents {
-				agent, ok := a.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				if agent["agent_id"] == newAgentID {
-					return fmt.Sprintf("Agent created%s:\n\n%s", teamMsg, formatAgent(agent))
-				}
-			}
-		}
-	}
-
-	if !blocking {
-		return fmt.Sprintf("Agent '%s' launched in pane %s (non-blocking, use list_agents to check)", agentType, paneID)
-	}
-	return fmt.Sprintf("Warning: agent launched in pane %s but not registered after 30s", paneID)
+	return b.formatCreatedAgent(newAgentID, teamMsg, paneID, agentType, blocking, "")
 }
 
 func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
@@ -234,7 +236,10 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 	}
 
 	teamMsg := b.handleTeamAssignment(newAgentID, team, senderAgentID)
+	return b.formatCreatedAgent(newAgentID, teamMsg, "", agentType, blocking, hostname)
+}
 
+func (b *Backend) formatCreatedAgent(newAgentID, teamMsg, paneID, agentType string, blocking bool, remoteHost string) string {
 	if newAgentID != "" {
 		data, err := b.get("/agents")
 		if err == nil {
@@ -245,16 +250,26 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 					continue
 				}
 				if agent["agent_id"] == newAgentID {
-					return fmt.Sprintf("Remote agent created on %s%s:\n\n%s", hostname, teamMsg, formatAgent(agent))
+					prefix := "Agent created"
+					if remoteHost != "" {
+						prefix = fmt.Sprintf("Remote agent created on %s", remoteHost)
+					}
+					return fmt.Sprintf("%s%s:\n\n%s", prefix, teamMsg, formatAgent(agent))
 				}
 			}
 		}
 	}
 
 	if !blocking {
-		return fmt.Sprintf("Remote agent '%s' launched on %s (non-blocking, use list_agents to check)", agentType, hostname)
+		if remoteHost != "" {
+			return fmt.Sprintf("Remote agent '%s' launched on %s (non-blocking, use list_agents to check)", agentType, remoteHost)
+		}
+		return fmt.Sprintf("Agent '%s' launched in pane %s (non-blocking, use list_agents to check)", agentType, paneID)
 	}
-	return fmt.Sprintf("Warning: remote agent launched on %s but not registered after 30s", hostname)
+	if remoteHost != "" {
+		return fmt.Sprintf("Warning: remote agent launched on %s but not registered after 30s", remoteHost)
+	}
+	return fmt.Sprintf("Warning: agent launched in pane %s but not registered after 30s", paneID)
 }
 
 // remoteArchSuffix detects the remote host architecture via `uname -m`
