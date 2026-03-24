@@ -278,12 +278,13 @@ class AuthSessionStore:
 
     # --- Delegation tokens ---
 
-    def create_delegation_token(self, creator: str, target_host: str) -> tuple[str, int]:
+    def create_delegation_token(self, creator: str, target_host: str, team: str = "") -> tuple[str, int]:
         """Create a delegation token for a remote agent.
 
         Args:
             creator: agent_id of the creating agent
             target_host: hostname where the remote agent will run
+            team: optional team to auto-join on registration
 
         Returns:
             (token, ttl) tuple
@@ -293,6 +294,7 @@ class AuthSessionStore:
         self._delegation_tokens[token] = {
             "creator": creator,
             "target_host": target_host,
+            "team": team,
             "expires": time.time() + self.DELEGATION_TOKEN_TTL,
         }
         return token, self.DELEGATION_TOKEN_TTL

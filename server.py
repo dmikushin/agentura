@@ -582,6 +582,18 @@ async def handle_register(request: web.Request) -> web.Response:
         )
         agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
         print(f"[agentura] Registered '{entry.agent_id}' ({entry.name}) pane={entry.pane_id}")
+
+        # Auto-join team if specified in registration payload
+        team_name = body.get("team", "")
+        if team_name:
+            team_reg: TeamRegistry = request.app["team_registry"]
+            team = team_reg.get(team_name)
+            if team and entry.agent_id not in team["members"]:
+                team["members"].append(entry.agent_id)
+                team_reg._save()
+                entry.teams.append(team_name)
+                print(f"[agentura] Auto-joined '{entry.agent_id}' to team '{team_name}'")
+
         return web.json_response({
             "status": "ok",
             "stream_file": str(entry.stream_file),
@@ -1118,8 +1130,10 @@ async def handle_delegate(request: web.Request) -> web.Response:
         return web.json_response(
             {"status": "error", "error": "invalid or expired agent_token"}, status=401)
 
-    token, ttl = auth_store.create_delegation_token(creator, target_host)
-    print(f"[agentura] Delegation token created by {creator} for host {target_host}")
+    team = body.get("team", "")
+    token, ttl = auth_store.create_delegation_token(creator, target_host, team=team)
+    print(f"[agentura] Delegation token created by {creator} for host {target_host}" +
+          (f" (team: {team})" if team else ""))
     return web.json_response({
         "status": "ok",
         "delegation_token": token,
@@ -1166,6 +1180,19 @@ async def handle_sidecar_register(request: web.Request) -> web.Response:
         )
         agent_token, agent_token_ttl = auth_store.create_agent_token(entry.agent_id)
         print(f"[agentura] Agent registered: '{entry.agent_id}' ({entry.name})")
+
+        # Auto-join team if delegation token carried one
+        delegation_info = request.get("delegation_info")
+        if delegation_info and delegation_info.get("team"):
+            team_name = delegation_info["team"]
+            team_reg: TeamRegistry = request.app["team_registry"]
+            team = team_reg.get(team_name)
+            if team and entry.agent_id not in team["members"]:
+                team["members"].append(entry.agent_id)
+                team_reg._save()
+                entry.teams.append(team_name)
+                print(f"[agentura] Auto-joined '{entry.agent_id}' to team '{team_name}'")
+
         return web.json_response({
             "status": "ok",
             "agent_id": entry.agent_id,

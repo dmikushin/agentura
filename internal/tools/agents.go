@@ -136,8 +136,12 @@ func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, te
 }
 
 func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
-	shellCmd := fmt.Sprintf("env AGENTURA_URL=%s agentura-run --%s",
-		shellQuote(b.monitorURL), agentType)
+	teamEnv := ""
+	if team != "" {
+		teamEnv = fmt.Sprintf("AGENTURA_TEAM=%s ", shellQuote(team))
+	}
+	shellCmd := fmt.Sprintf("env %sAGENTURA_URL=%s agentura-run --%s",
+		teamEnv, shellQuote(b.monitorURL), agentType)
 
 	// If team is specified, create/reuse a tmux session named after the team
 	tmuxArgs := []string{"new-window", "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType}
@@ -183,10 +187,14 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 		return "Error: no AGENT_TOKEN available (agent not registered?)"
 	}
 
-	resp, err := b.post("/api/auth/delegate", map[string]interface{}{
+	delegatePayload := map[string]interface{}{
 		"target_host":         hostname,
 		"_inject_agent_token": true,
-	})
+	}
+	if team != "" {
+		delegatePayload["team"] = team
+	}
+	resp, err := b.post("/api/auth/delegate", delegatePayload)
 	if err != nil {
 		return fmt.Sprintf("Error: delegation token creation failed: %v", err)
 	}
