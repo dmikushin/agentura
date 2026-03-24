@@ -1260,6 +1260,45 @@ async def handle_sidecar_queue_message(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_team_broadcast(request: web.Request) -> web.Response:
+    """Broadcast a message to all members of a team. Requires Bearer auth."""
+    registry: AgentRegistry = request.app["registry"]
+    team_reg: TeamRegistry = request.app["team_registry"]
+    try:
+        body = await request.json()
+        team_name = body["team_name"]
+        text = body["text"]
+        sender = body["sender"]
+    except (KeyError, json.JSONDecodeError) as e:
+        return web.json_response({"status": "error", "error": str(e)}, status=400)
+
+    team = team_reg.get(team_name)
+    if team is None:
+        return web.json_response(
+            {"status": "error", "error": f"team '{team_name}' not found"}, status=404)
+
+    if sender not in team["members"]:
+        return web.json_response(
+            {"status": "error", "error": f"'{sender}' is not a member of team '{team_name}'"}, status=403)
+
+    recipients = 0
+    for member_id in team["members"]:
+        if member_id == sender:
+            continue
+        entry = registry.agents.get(member_id)
+        if entry is None:
+            continue
+        entry.message_queue.append({
+            "text": text,
+            "sender": sender,
+            "timestamp": _now(),
+        })
+        recipients += 1
+
+    print(f"[agentura] Broadcast to team '{team_name}' from {sender}: {recipients} recipient(s)")
+    return web.json_response({"status": "ok", "recipients": recipients})
+
+
 # --- Skill endpoints ---
 
 async def handle_skills_list(request: web.Request) -> web.Response:
@@ -1333,6 +1372,7 @@ async def main():
     app.router.add_post("/sidecar/heartbeat", handle_sidecar_heartbeat)
     app.router.add_get("/sidecar/messages", handle_sidecar_messages)
     app.router.add_post("/sidecar/queue-message", handle_sidecar_queue_message)
+    app.router.add_post("/teams/broadcast", handle_team_broadcast)
 
     runner = web.AppRunner(app)
     await runner.setup()

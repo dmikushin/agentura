@@ -48,6 +48,31 @@ func (b *Backend) SendMessage(targetAgentID, message string, rsvp bool) string {
 	return fmt.Sprintf("Message %s to %s", status, targetAgentID)
 }
 
+// BroadcastMessage sends a message to all members of a team.
+func (b *Backend) BroadcastMessage(teamName, message string) string {
+	if b.agentID == "" {
+		return "Error: AGENT_ID env not set (not running under agent-run?)"
+	}
+
+	fullMessage := fmt.Sprintf("Agent %s says to team: %s", b.agentID, message)
+
+	resp, err := b.post("/teams/broadcast", map[string]interface{}{
+		"team_name": teamName,
+		"text":      fullMessage,
+		"sender":    b.agentID,
+	})
+	if err != nil {
+		return fmt.Sprintf("Error broadcasting: %v", err)
+	}
+	if status, _ := resp["status"].(string); status != "ok" {
+		errMsg, _ := resp["error"].(string)
+		return fmt.Sprintf("Error: %s", errMsg)
+	}
+
+	recipients, _ := resp["recipients"].(float64)
+	return fmt.Sprintf("Broadcast sent to %d member(s) of team '%s'", int(recipients), teamName)
+}
+
 // InterruptAgent sends Escape to an agent's tmux pane to cancel its current operation.
 func (b *Backend) InterruptAgent(targetAgentID string) string {
 	_, err := b.resolveAgent(targetAgentID)

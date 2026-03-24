@@ -210,6 +210,21 @@ func registerTools(s *server.MCPServer) {
 		makeHandler("interrupt_agent"),
 	)
 
+	s.AddTool(
+		mcp.NewTool("broadcast_message",
+			mcp.WithDescription("Send a message to all members of a team.\n\nThe message is delivered to every team member except yourself.\nYou must be a member of the team to broadcast."),
+			mcp.WithString("team_name",
+				mcp.Required(),
+				mcp.Description("name of the team to broadcast to"),
+			),
+			mcp.WithString("message",
+				mcp.Required(),
+				mcp.Description("text to send to all team members"),
+			),
+		),
+		makeHandler("broadcast_message"),
+	)
+
 	// --- Team tools ---
 
 	s.AddTool(
