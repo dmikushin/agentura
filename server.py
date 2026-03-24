@@ -1272,6 +1272,8 @@ async def handle_sidecar_messages(request: web.Request) -> web.Response:
 
     messages = list(entry.message_queue)
     entry.message_queue.clear()
+    if messages:
+        print(f"[agentura] Delivering {len(messages)} message(s) to '{agent_id}' (polled by sidecar)")
     return web.json_response({"status": "ok", "messages": messages})
 
 
@@ -1296,6 +1298,7 @@ async def handle_sidecar_queue_message(request: web.Request) -> web.Response:
         "sender": sender,
         "timestamp": _now(),
     })
+    print(f"[agentura] Message queued for '{agent_id}' from '{sender}' ({len(text)} chars, queue depth: {len(entry.message_queue)})")
     return web.json_response({"status": "ok"})
 
 

@@ -3,6 +3,8 @@ package tmux
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,20 +25,49 @@ func Inject(paneID, text string) error {
 	// Snapshot pane content before injection
 	before, _ := CapturePane(paneID, 50)
 
-	// Paste text via tmux buffer
-	ctx1, cancel1 := timeoutContext(5 * time.Second)
-	defer cancel1()
-	cmd := exec.CommandContext(ctx1, "tmux", "load-buffer", "-")
-	cmd.Stdin = stringReader(text)
-	if err := cmd.Run(); err != nil {
-		return err
-	}
+	// Use a unique named buffer to avoid races with concurrent pastes.
+	// tmux's default buffer is global — two simultaneous load-buffer calls
+	// overwrite each other, delivering the wrong text to the wrong pane.
+	rb := make([]byte, 4)
+	rand.Read(rb)
+	bufName := fmt.Sprintf("ag_%s", hex.EncodeToString(rb))
 
-	ctx2, cancel2 := timeoutContext(5 * time.Second)
-	defer cancel2()
-	// -p: bracketed paste mode so multiline \n doesn't trigger submit
-	if err := exec.CommandContext(ctx2, "tmux", "paste-buffer", "-p", "-t", paneID).Run(); err != nil {
-		return err
+	// Try paste up to 3 times — verify text actually appeared in pane.
+	pasteOK := false
+	for pasteAttempt := 0; pasteAttempt < 3; pasteAttempt++ {
+		// Load text into a named tmux buffer
+		ctx1, cancel1 := timeoutContext(5 * time.Second)
+		cmd := exec.CommandContext(ctx1, "tmux", "load-buffer", "-b", bufName, "-")
+		cmd.Stdin = stringReader(text)
+		if err := cmd.Run(); err != nil {
+			cancel1()
+			return err
+		}
+		cancel1()
+
+		// Paste from the named buffer into pane (-p: bracketed paste mode)
+		ctx2, cancel2 := timeoutContext(5 * time.Second)
+		if err := exec.CommandContext(ctx2, "tmux", "paste-buffer", "-b", bufName, "-p", "-t", paneID).Run(); err != nil {
+			cancel2()
+			return err
+		}
+		cancel2()
+
+		// Delete the named buffer (cleanup)
+		exec.Command("tmux", "delete-buffer", "-b", bufName).Run()
+
+		// Verify the paste actually appeared in the pane
+		time.Sleep(200 * time.Millisecond)
+		after, _ := CapturePane(paneID, 50)
+		if after != before {
+			pasteOK = true
+			break
+		}
+		log.Printf("[tmux] Paste attempt %d failed for pane %s (pane unchanged), retrying", pasteAttempt+1, paneID)
+		time.Sleep(300 * time.Millisecond)
+	}
+	if !pasteOK {
+		log.Printf("[tmux] WARNING: paste failed after 3 attempts for pane %s (%d chars)", paneID, len(text))
 	}
 
 	// Hammer Enter until pane content changes (agent consumed the input)

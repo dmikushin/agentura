@@ -106,13 +106,22 @@ func (s *Sidecar) Run() {
 
 		// Poll and inject messages
 		messages := s.pollMessages()
+		if len(messages) > 0 {
+			log.Printf("[sidecar] Received %d message(s) from server for %s", len(messages), s.agentID)
+		}
 		for i, msg := range messages {
 			if i > 0 {
 				time.Sleep(300 * time.Millisecond)
 			}
 			text, _ := msg["text"].(string)
+			sender, _ := msg["sender"].(string)
 			if text != "" {
-				tmux.Inject(s.paneID, text)
+				log.Printf("[sidecar] Injecting message from %s into pane %s (%d chars)", sender, s.paneID, len(text))
+				if err := tmux.Inject(s.paneID, text); err != nil {
+					log.Printf("[sidecar] ERROR: tmux.Inject failed for pane %s: %v — MESSAGE LOST", s.paneID, err)
+				}
+			} else {
+				log.Printf("[sidecar] WARNING: empty message text from %s, skipping", sender)
 			}
 		}
 
@@ -201,15 +210,19 @@ func (s *Sidecar) pushStream(content string) {
 }
 
 func (s *Sidecar) heartbeat(childAlive bool) {
-	s.client.Post("/sidecar/heartbeat", map[string]interface{}{
+	_, err := s.client.Post("/sidecar/heartbeat", map[string]interface{}{
 		"agent_id":    s.agentID,
 		"child_alive": childAlive,
 	})
+	if err != nil {
+		log.Printf("[sidecar] ERROR: heartbeat failed for %s: %v", s.agentID, err)
+	}
 }
 
 func (s *Sidecar) pollMessages() []map[string]interface{} {
 	resp, err := s.client.Get(fmt.Sprintf("/sidecar/messages?agent_id=%s", s.agentID))
 	if err != nil {
+		log.Printf("[sidecar] ERROR: pollMessages failed for %s: %v", s.agentID, err)
 		return nil
 	}
 	msgsRaw, ok := resp["messages"]
