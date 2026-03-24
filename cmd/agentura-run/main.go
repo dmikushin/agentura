@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 
 	"github.com/dmikushin/agentura/internal/api"
@@ -429,69 +430,71 @@ func ensureAgentContext(contextPath string) {
 
 func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	mcpPath := filepath.Join(cwd, ".mcp.json")
-
-	// Read existing config and check if agentura is already configured
-	if existing, err := os.ReadFile(mcpPath); err == nil {
-		var data map[string]interface{}
-		if json.Unmarshal(existing, &data) == nil {
-			if servers, ok := data["mcpServers"].(map[string]interface{}); ok {
-				if _, has := servers["agentura"]; has {
-					return // already configured, don't overwrite
+	withFileLock(mcpPath, func() {
+		if existing, err := os.ReadFile(mcpPath); err == nil {
+			var data map[string]interface{}
+			if json.Unmarshal(existing, &data) == nil {
+				if servers, ok := data["mcpServers"].(map[string]interface{}); ok {
+					if _, has := servers["agentura"]; has {
+						return
+					}
 				}
 			}
 		}
-	}
 
-	entry := copyMap(agenturaServer)
-	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+		entry := copyMap(agenturaServer)
+		entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
 
-	mcpConfig := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"agentura": entry,
-		},
-	}
+		mcpConfig := map[string]interface{}{
+			"mcpServers": map[string]interface{}{
+				"agentura": entry,
+			},
+		}
 
-	raw, _ := json.MarshalIndent(mcpConfig, "", "  ")
-	if err := os.WriteFile(mcpPath, raw, 0644); err != nil {
-		log.Printf("[agent-run] Warning: failed to create .mcp.json: %v", err)
-		return
-	}
-	log.Printf("[agent-run] Created MCP config: %s", mcpPath)
+		raw, _ := json.MarshalIndent(mcpConfig, "", "  ")
+		if err := os.WriteFile(mcpPath, raw, 0644); err != nil {
+			log.Printf("[agent-run] Warning: failed to create .mcp.json: %v", err)
+			return
+		}
+		log.Printf("[agent-run] Created MCP config: %s", mcpPath)
+	})
 }
 
 func ensureGeminiMCP(cwd, monitorURL, _ string) {
 	geminiDir := filepath.Join(cwd, ".gemini")
 	configPath := filepath.Join(geminiDir, "settings.json")
-
-	var data map[string]interface{}
-	if raw, err := os.ReadFile(configPath); err == nil {
-		json.Unmarshal(raw, &data)
-	}
-	if data == nil {
-		data = make(map[string]interface{})
-	}
-
-	servers, _ := data["mcpServers"].(map[string]interface{})
-	if servers == nil {
-		servers = make(map[string]interface{})
-		data["mcpServers"] = servers
-	}
-
-	if _, exists := servers["agentura"]; exists {
-		return // already configured, don't overwrite
-	}
-
-	entry := copyMap(agenturaServer)
-	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
-	servers["agentura"] = entry
-
 	os.MkdirAll(geminiDir, 0755)
-	raw, _ := json.MarshalIndent(data, "", "  ")
-	if err := os.WriteFile(configPath, raw, 0644); err != nil {
-		log.Printf("[agent-run] Warning: failed to create gemini MCP config: %v", err)
-		return
-	}
-	log.Printf("[agent-run] Created MCP config: %s", configPath)
+
+	withFileLock(configPath, func() {
+		var data map[string]interface{}
+		if raw, err := os.ReadFile(configPath); err == nil {
+			json.Unmarshal(raw, &data)
+		}
+		if data == nil {
+			data = make(map[string]interface{})
+		}
+
+		servers, _ := data["mcpServers"].(map[string]interface{})
+		if servers == nil {
+			servers = make(map[string]interface{})
+			data["mcpServers"] = servers
+		}
+
+		if _, exists := servers["agentura"]; exists {
+			return
+		}
+
+		entry := copyMap(agenturaServer)
+		entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+		servers["agentura"] = entry
+
+		raw, _ := json.MarshalIndent(data, "", "  ")
+		if err := os.WriteFile(configPath, raw, 0644); err != nil {
+			log.Printf("[agent-run] Warning: failed to create gemini MCP config: %v", err)
+			return
+		}
+		log.Printf("[agent-run] Created MCP config: %s", configPath)
+	})
 }
 
 func ensureGeminiTrust(cwd string) {
@@ -535,6 +538,27 @@ func copyMap(m map[string]interface{}) map[string]interface{} {
 		cp[k] = v
 	}
 	return cp
+}
+
+// withFileLock acquires an exclusive flock on path+".lock", runs fn, then releases.
+// Prevents concurrent agentura-run processes from racing on the same config file.
+func withFileLock(path string, fn func()) {
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fn() // can't lock, run anyway
+		return
+	}
+	defer f.Close()
+	defer os.Remove(lockPath)
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		fn() // can't lock, run anyway
+		return
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+
+	fn()
 }
 
 func ensureClaudeTrust(cwd string) {
