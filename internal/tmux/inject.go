@@ -24,12 +24,15 @@ func Inject(paneID, text string) error {
 
 	ctx2, cancel2 := timeoutContext(5 * time.Second)
 	defer cancel2()
-	if err := exec.CommandContext(ctx2, "tmux", "paste-buffer", "-t", paneID).Run(); err != nil {
+	// -p: use bracketed paste mode so CLIs treat content as paste (not keystrokes)
+	// This prevents \n inside multiline text from triggering submit
+	if err := exec.CommandContext(ctx2, "tmux", "paste-buffer", "-p", "-t", paneID).Run(); err != nil {
 		return err
 	}
 
-	// Press Enter separately
-	time.Sleep(50 * time.Millisecond)
+	// Wait for bracketed paste to complete and Gemini's bufferFastReturn (30ms) to expire
+	time.Sleep(100 * time.Millisecond)
+	// send-keys Enter = \r (0x0D) = ink 'return' = SUBMIT in both Claude and Gemini
 	return sendKeys(paneID, "Enter")
 }
 
