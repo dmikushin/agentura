@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dmikushin/agentura/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -34,10 +35,13 @@ import (
 func main() {
 	log.SetFlags(0)
 
-	if os.Getenv("AGENTURA_URL") == "" {
-		fmt.Fprintln(os.Stderr, "Error: AGENTURA_URL environment variable is required")
+	// Ensure AGENTURA_URL is available for backend subprocesses
+	if config.MonitorURL() == "" {
+		fmt.Fprintln(os.Stderr, "Error: AGENTURA_URL not set and no default compiled in")
 		os.Exit(1)
 	}
+	// Export for backend subprocess (it inherits env)
+	os.Setenv("AGENTURA_URL", config.MonitorURL())
 
 	s := server.NewMCPServer("agentura", "1.0.0")
 

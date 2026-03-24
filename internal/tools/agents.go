@@ -137,7 +137,7 @@ func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, te
 }
 
 func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
-	shellCmd := fmt.Sprintf("cd %s && AGENTURA_URL=%s exec agent-run --%s",
+	shellCmd := fmt.Sprintf("cd %s && AGENTURA_URL=%s exec agentura-run --%s",
 		shellQuote(cwd), shellQuote(b.monitorURL), agentType)
 
 	result, err := exec.Command("tmux", "new-window", "-P", "-F", "#{pane_id}", "-n", agentType, shellCmd).Output()
@@ -201,7 +201,8 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 	delegationToken, _ := resp["delegation_token"].(string)
 
 	// Step 2: SSH to remote host and launch agent
-	windowCmd := fmt.Sprintf("AGENTURA_URL=%s AGENTURA_TOKEN=%s exec agent-run --%s",
+	// AGENTURA_URL passed as env for compatibility; compiled-in default also works
+	windowCmd := fmt.Sprintf("AGENTURA_URL=%s AGENTURA_TOKEN=%s exec agentura-run --%s",
 		shellQuote(b.monitorURL), shellQuote(delegationToken), agentType)
 	remoteCmd := fmt.Sprintf("tmux new-window -c %s -P -F '#{pane_id}' -n %s %s",
 		shellQuote(cwd), shellQuote(agentType), shellQuote(windowCmd))

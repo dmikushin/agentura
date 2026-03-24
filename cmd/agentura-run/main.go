@@ -27,6 +27,7 @@ import (
 
 	"github.com/dmikushin/agentura/internal/api"
 	"github.com/dmikushin/agentura/internal/auth"
+	"github.com/dmikushin/agentura/internal/config"
 	"github.com/dmikushin/agentura/internal/sidecar"
 )
 
@@ -71,9 +72,9 @@ func main() {
 	// Load .env from cwd
 	loadDotenv()
 
-	monitorURL := os.Getenv("AGENTURA_URL")
+	monitorURL := config.MonitorURL()
 	if monitorURL == "" {
-		fatal("AGENTURA_URL environment variable is required\n  Set it in env or create a .env file in the working directory")
+		fatal("AGENTURA_URL not set and no default compiled in\n  Set AGENTURA_URL in env, .env file, or build with: make build")
 	}
 
 	// --- Resolve command ---

@@ -18,6 +18,7 @@ import (
 
 	"github.com/dmikushin/agentura/internal/api"
 	"github.com/dmikushin/agentura/internal/auth"
+	"github.com/dmikushin/agentura/internal/config"
 	"github.com/dmikushin/agentura/internal/sidecar"
 )
 
@@ -36,9 +37,9 @@ type Backend struct {
 
 // NewBackend creates a new tool backend from environment variables.
 func NewBackend() (*Backend, error) {
-	monitorURL := os.Getenv("AGENTURA_URL")
+	monitorURL := config.MonitorURL()
 	if monitorURL == "" {
-		return nil, fmt.Errorf("AGENTURA_URL environment variable is required")
+		return nil, fmt.Errorf("AGENTURA_URL not set and no default compiled in")
 	}
 	dataDir := os.Getenv("AGENTURA_DATA_DIR")
 	if dataDir == "" {
