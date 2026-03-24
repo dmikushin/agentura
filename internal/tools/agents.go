@@ -136,10 +136,10 @@ func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, te
 }
 
 func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
-	shellCmd := fmt.Sprintf("cd %s && AGENTURA_URL=%s exec agentura-run --%s",
-		shellQuote(cwd), shellQuote(b.monitorURL), agentType)
+	shellCmd := fmt.Sprintf("env AGENTURA_URL=%s agentura-run --%s",
+		shellQuote(b.monitorURL), agentType)
 
-	result, err := exec.Command("tmux", "new-window", "-P", "-F", "#{pane_id}", "-n", agentType, shellCmd).Output()
+	result, err := exec.Command("tmux", "new-window", "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType, shellCmd).Output()
 	if err != nil {
 		return fmt.Sprintf("Error: failed to create tmux window: %v", err)
 	}

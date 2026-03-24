@@ -17,7 +17,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -70,10 +69,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set up file logging
-	logFile, err := os.OpenFile("agentura-run.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Log only to file — TUI agents (claude, gemini) need a clean terminal.
+	// Logging to stderr corrupts the TUI before the agent can enter raw mode.
+	logFile, err := os.OpenFile(fmt.Sprintf("agentura-run-%d.log", os.Getpid()), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err == nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+		log.SetOutput(logFile)
 		defer logFile.Close()
 	}
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -445,7 +445,7 @@ func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	log.Printf("[agent-run] Created MCP config: %s", mcpPath)
 }
 
-func ensureGeminiMCP(cwd, monitorURL, sockPath string) {
+func ensureGeminiMCP(cwd, monitorURL, _ string) {
 	geminiDir := filepath.Join(cwd, ".gemini")
 	configPath := filepath.Join(geminiDir, "settings.json")
 
@@ -464,13 +464,7 @@ func ensureGeminiMCP(cwd, monitorURL, sockPath string) {
 	}
 
 	entry := copyMap(agenturaServer)
-	// Gemini's sanitizeEnvironment filters env vars matching /TOKEN/i,
-	// which strips AGENT_TOKEN. Explicitly pass AGENTURA_SIDECAR_SOCK
-	// so the MCP backend can use sidecar IPC (which handles token injection).
-	entry["env"] = map[string]string{
-		"AGENTURA_URL":          monitorURL,
-		"AGENTURA_SIDECAR_SOCK": sockPath,
-	}
+	entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
 	servers["agentura"] = entry
 
 	os.MkdirAll(geminiDir, 0755)
