@@ -9,9 +9,16 @@ git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | while read f; d
     python3 -c "import ast; ast.parse(open('$f').read())" || exit 1
 done
 
+# Build Go binaries
+echo "[pre-commit] Building Go binaries..."
+make build || exit 1
+
 # Go unit tests
 echo "[pre-commit] Running Go tests..."
 go test ./... || exit 1
+
+# Add bin/ to PATH so e2e tests find agentura-run, agentura-mcp-backend
+export PATH="$(pwd)/bin:$PATH"
 
 # E2E test: requires agentura server running
 echo "[pre-commit] Running e2e tests..."
