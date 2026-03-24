@@ -1,4 +1,4 @@
-// agentura-backend — tool executor for agentura MCP server.
+// agentura-mcp-backend — tool executor for agentura MCP server.
 //
 // This binary is exec'd by agentura-mcp for each tool call.
 // It can be replaced on disk without restarting the MCP server —
@@ -6,8 +6,8 @@
 //
 // Usage:
 //
-//	echo '{"agent_id":"x@y:1"}' | agentura-backend read_stream
-//	agentura-backend list_agents
+//	echo '{"agent_id":"x@y:1"}' | agentura-mcp-backend read_stream
+//	agentura-mcp-backend list_agents
 //
 // Protocol:
 //   - Tool name from argv[1]
@@ -27,7 +27,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: agentura-backend <tool_name>")
+		fmt.Fprintln(os.Stderr, "Usage: agentura-mcp-backend <tool_name>")
 		fmt.Fprintln(os.Stderr, "  Reads JSON args from stdin, writes JSON result to stdout.")
 		fmt.Fprintln(os.Stderr, "  Tools: list_agents, list_hosts, create_agent, read_stream,")
 		fmt.Fprintln(os.Stderr, "         send_message, interrupt_agent, list_teams, create_team,")

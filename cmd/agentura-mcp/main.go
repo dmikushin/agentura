@@ -1,19 +1,19 @@
 // agentura-mcp — stable MCP stdio server for agentura.
 //
-// Thin shell that delegates every tool call to agentura-backend by exec'ing
+// Thin shell that delegates every tool call to agentura-mcp-backend by exec'ing
 // it as a subprocess. This mirrors the Python design where mcp_server.py
 // reloads mcp_backend.py on every call:
 //
 //   - agentura-mcp  = stable, never needs restart (like mcp_server.py)
-//   - agentura-backend = replaceable on disk (like mcp_backend.py)
+//   - agentura-mcp-backend = replaceable on disk (like mcp_backend.py)
 //
 // Replace the backend binary → next tool call picks up the new version
 // automatically, without restarting the MCP connection to the agent.
 //
 // Backend binary location (in order of priority):
 //  1. AGENTURA_BACKEND env var
-//  2. agentura-backend next to this binary
-//  3. agentura-backend in PATH
+//  2. agentura-mcp-backend next to this binary
+//  3. agentura-mcp-backend in PATH
 package main
 
 import (
@@ -49,30 +49,30 @@ func main() {
 	}
 }
 
-// findBackend locates the agentura-backend binary.
+// findBackend locates the agentura-mcp-backend binary.
 func findBackend() string {
 	// 1. Explicit env var
-	if p := os.Getenv("AGENTURA_BACKEND"); p != "" {
+	if p := os.Getenv("AGENTURA_MCP_BACKEND"); p != "" {
 		return p
 	}
 
 	// 2. Next to this binary
 	if self, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(self), "agentura-backend")
+		candidate := filepath.Join(filepath.Dir(self), "agentura-mcp-backend")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
 
 	// 3. In PATH
-	if p, err := exec.LookPath("agentura-backend"); err == nil {
+	if p, err := exec.LookPath("agentura-mcp-backend"); err == nil {
 		return p
 	}
 
-	return "agentura-backend" // fallback, will fail with a clear error
+	return "agentura-mcp-backend" // fallback, will fail with a clear error
 }
 
-// callBackend exec's agentura-backend with the given tool name and args.
+// callBackend exec's agentura-mcp-backend with the given tool name and args.
 // Returns the tool result string.
 func callBackend(toolName string, args map[string]interface{}) string {
 	backendPath := findBackend()

@@ -3,22 +3,22 @@
 build:
 	CGO_ENABLED=0 go build -o bin/agentura-run ./cmd/agentura-run
 	CGO_ENABLED=0 go build -o bin/agentura-mcp ./cmd/agentura-mcp
-	CGO_ENABLED=0 go build -o bin/agentura-backend ./cmd/agentura-backend
+	CGO_ENABLED=0 go build -o bin/agentura-mcp-backend ./cmd/agentura-mcp-backend
 
 linux-amd64:
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-run-linux-amd64 ./cmd/agentura-run
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-mcp-linux-amd64 ./cmd/agentura-mcp
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-backend-linux-amd64 ./cmd/agentura-backend
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-mcp-backend-linux-amd64 ./cmd/agentura-mcp-backend
 
 linux-arm64:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/agentura-run-linux-arm64 ./cmd/agentura-run
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/agentura-mcp-linux-arm64 ./cmd/agentura-mcp
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/agentura-backend-linux-arm64 ./cmd/agentura-backend
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/agentura-mcp-backend-linux-arm64 ./cmd/agentura-mcp-backend
 
 darwin-amd64:
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-run-darwin-amd64 ./cmd/agentura-run
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-mcp-darwin-amd64 ./cmd/agentura-mcp
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-backend-darwin-amd64 ./cmd/agentura-backend
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentura-mcp-backend-darwin-amd64 ./cmd/agentura-mcp-backend
 
 test:
 	go test ./...
