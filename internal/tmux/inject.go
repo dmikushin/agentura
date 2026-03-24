@@ -70,39 +70,48 @@ func Inject(paneID, text string) error {
 		log.Printf("[tmux] WARNING: paste failed after 3 attempts for pane %s (%d chars)", paneID, len(text))
 	}
 
-	// Hammer Enter until pane content changes (agent consumed the input)
-	delays := []time.Duration{
-		100 * time.Millisecond,
-		150 * time.Millisecond,
-		200 * time.Millisecond,
-		300 * time.Millisecond,
-		400 * time.Millisecond,
-		500 * time.Millisecond,
-		500 * time.Millisecond,
-		500 * time.Millisecond,
-		500 * time.Millisecond,
-		500 * time.Millisecond,
-	}
+	// Snapshot AFTER paste (text is now in the input field)
+	afterPaste, _ := CapturePane(paneID, 50)
 
-	for i, delay := range delays {
-		time.Sleep(delay)
-
-		if i%2 == 0 {
+	// Hammer Enter with escalating tricks until the agent starts processing.
+	// Do NOT give up — keep trying for 30 seconds.
+	// Strategies: Enter, Space+Enter, double Enter, triple Enter.
+	for attempt := 0; attempt < 60; attempt++ {
+		switch attempt % 4 {
+		case 0:
+			// Plain Enter
 			sendKeys(paneID, "Enter")
-		} else {
+		case 1:
+			// Space then Enter (space can "wake" a stuck input field)
+			sendKeys(paneID, " ")
+			time.Sleep(50 * time.Millisecond)
+			sendKeys(paneID, "Enter")
+		case 2:
+			// Double Enter with gap
+			sendKeys(paneID, "Enter")
+			time.Sleep(80 * time.Millisecond)
+			sendKeys(paneID, "Enter")
+		case 3:
+			// Triple Enter rapid fire
+			sendKeys(paneID, "Enter")
+			time.Sleep(30 * time.Millisecond)
 			sendKeys(paneID, "Enter")
 			time.Sleep(30 * time.Millisecond)
 			sendKeys(paneID, "Enter")
 		}
 
-		time.Sleep(100 * time.Millisecond)
-		after, _ := CapturePane(paneID, 50)
-		if paneChanged(before, after, text) {
+		time.Sleep(500 * time.Millisecond)
+
+		current, _ := CapturePane(paneID, 50)
+		if current != afterPaste {
+			// Pane changed after Enter — agent consumed the input
+			log.Printf("[tmux] Enter accepted on attempt %d for pane %s", attempt+1, paneID)
 			return nil
 		}
 	}
 
-	return nil // best effort
+	log.Printf("[tmux] WARNING: Enter not accepted after 60 attempts (30s) for pane %s", paneID)
+	return nil
 }
 
 // waitForReady probes the pane by typing a unique random string and
@@ -137,21 +146,6 @@ func waitForReady(paneID string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	// Gave up — proceed anyway (best effort)
-}
-
-func paneChanged(before, after, injectedText string) bool {
-	if after == before {
-		return false
-	}
-	beforeLines := strings.Count(before, "\n")
-	afterLines := strings.Count(after, "\n")
-	if afterLines > beforeLines+1 {
-		return true
-	}
-	if strings.Contains(after, injectedText) && after != before {
-		return true
-	}
-	return false
 }
 
 func sendKeys(paneID string, keys ...string) error {
