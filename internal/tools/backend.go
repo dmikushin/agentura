@@ -31,7 +31,6 @@ type Backend struct {
 	authToken    string
 	cursors      map[string]int
 	cursorsPath  string // file path for persistent cursors
-	hostsPath    string
 	agentPresets map[string]bool
 }
 
@@ -45,11 +44,6 @@ func NewBackend() (*Backend, error) {
 	if dataDir == "" {
 		dataDir = "/data"
 	}
-	hostsPath := os.Getenv("HOSTS_REGISTRY_PATH")
-	if hostsPath == "" {
-		hostsPath = filepath.Join(dataDir, "hosts.json")
-	}
-
 	// Cursor state persists across backend invocations via a temp file.
 	// Keyed by agent ID so each agent's MCP has its own cursor state.
 	agentID := os.Getenv("AGENT_ID")
@@ -67,7 +61,6 @@ func NewBackend() (*Backend, error) {
 		agentToken:   os.Getenv("AGENT_TOKEN"),
 		cursors:      make(map[string]int),
 		cursorsPath:  cursorsPath,
-		hostsPath:    hostsPath,
 		agentPresets: map[string]bool{"claude": true, "gemini": true},
 	}
 	b.loadCursors()
@@ -216,14 +209,11 @@ func formatAgent(a map[string]interface{}) string {
 }
 
 func (b *Backend) loadHostRegistry() map[string]interface{} {
-	data, err := os.ReadFile(b.hostsPath)
+	resp, err := b.get("/hosts")
 	if err != nil {
 		return nil
 	}
-	var hosts map[string]interface{}
-	if err := json.Unmarshal(data, &hosts); err != nil {
-		return nil
-	}
+	hosts, _ := resp["hosts"].(map[string]interface{})
 	return hosts
 }
 

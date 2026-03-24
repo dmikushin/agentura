@@ -3,5 +3,9 @@
     "tags": ["dev"],
     "cpu_count": 8,
     "notes": "ThinkPad T580 dev box"
+  },
+  "gambetta": {
+    "tags": ["remote"],
+    "notes": "88-thread/256GB heavy duty machine"
   }
 }

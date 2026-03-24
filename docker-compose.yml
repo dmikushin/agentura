@@ -11,6 +11,7 @@ services:
       - streams:/data                   # named volume for stream files
       - ${TMUX_SOCKET_PATH}:${TMUX_SOCKET_PATH}:ro  # host tmux socket
       - ./secrets/authorized_keys:/app/secrets/authorized_keys:ro
+      - ./hosts.json:/data/hosts.json:ro
     environment:
       - TMUX_TMPDIR=/tmp
       - AUTHORIZED_KEYS=/app/secrets/authorized_keys

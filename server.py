@@ -35,6 +35,7 @@ DATA_DIR = Path(os.environ.get("AGENTURA_DATA_DIR", "/data"))
 STREAMS_DIR = DATA_DIR / "streams"
 REGISTRY_PATH = STREAMS_DIR / "_registry.json"
 BOARDS_DIR = DATA_DIR / "boards"
+HOSTS_PATH = DATA_DIR / "hosts.json"
 SKILLS_DIR = Path(os.environ.get("SKILLS_DIR", "/app/skills"))
 AUTH_KEYS_PATH = os.environ.get("AUTHORIZED_KEYS", "/app/secrets/authorized_keys")
 
@@ -1304,6 +1305,19 @@ async def handle_team_broadcast(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "recipients": recipients})
 
 
+# --- Hosts endpoint ---
+
+async def handle_hosts(request: web.Request) -> web.Response:
+    """Return the host registry."""
+    if not HOSTS_PATH.is_file():
+        return web.json_response({"status": "ok", "hosts": {}})
+    try:
+        hosts = json.loads(HOSTS_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return web.json_response({"status": "ok", "hosts": {}})
+    return web.json_response({"status": "ok", "hosts": hosts})
+
+
 # --- Team board endpoints ---
 
 async def handle_board_post(request: web.Request) -> web.Response:
@@ -1421,6 +1435,7 @@ async def main():
     app.router.add_post("/api/auth/delegate-refresh", handle_delegate_refresh)
     app.router.add_post("/register", handle_register)
     app.router.add_get("/agents", handle_agents)
+    app.router.add_get("/hosts", handle_hosts)
     app.router.add_get("/stream/{pane_id}", handle_stream)
     app.router.add_get("/skills", handle_skills_list)
     app.router.add_get("/skills/{name}", handle_skill)
