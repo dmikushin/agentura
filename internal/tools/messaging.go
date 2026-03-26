@@ -73,6 +73,44 @@ func (b *Backend) BroadcastMessage(teamName, message string) string {
 	return fmt.Sprintf("Broadcast sent to %d member(s) of team '%s'", int(recipients), teamName)
 }
 
+// RestartAgent requests a graceful restart of the target agent's AI process.
+// The sidecar will send double SIGINT (like Ctrl-C twice), capture the session UUID,
+// and restart the process with --resume to continue the conversation.
+func (b *Backend) RestartAgent(targetAgentID, resumeSessionID, reason string) string {
+	_, err := b.resolveAgent(targetAgentID)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"agent_id": targetAgentID,
+	}
+	if resumeSessionID != "" {
+		payload["resume_session_id"] = resumeSessionID
+	}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+
+	resp, err := b.post("/sidecar/restart", payload)
+	if err != nil {
+		return fmt.Sprintf("Error requesting restart: %v", err)
+	}
+	if status, _ := resp["status"].(string); status != "ok" {
+		errMsg, _ := resp["error"].(string)
+		return fmt.Sprintf("Error: %s", errMsg)
+	}
+
+	result := fmt.Sprintf("Restart requested for %s", targetAgentID)
+	if resumeSessionID != "" {
+		result += fmt.Sprintf(" (will resume session %s)", resumeSessionID)
+	}
+	if reason != "" {
+		result += fmt.Sprintf(" — reason: %s", reason)
+	}
+	return result
+}
+
 // InterruptAgent sends Escape to an agent's tmux pane to cancel its current operation.
 func (b *Backend) InterruptAgent(targetAgentID string) string {
 	_, err := b.resolveAgent(targetAgentID)

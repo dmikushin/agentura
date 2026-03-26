@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -29,6 +31,12 @@ type Sidecar struct {
 	childPID   int
 	socketPath string
 
+	// Child command info (for restarting)
+	cmdPath string
+	cmdArgs []string
+	cmdName string
+
+	restarting       bool
 	prevHashes       map[string]bool
 	hashHistory      []string
 	lastTokenRefresh time.Time
@@ -43,6 +51,9 @@ type Config struct {
 	PaneID     string
 	ChildPID   int
 	SocketPath string
+	CmdPath    string   // full path to child executable
+	CmdArgs    []string // child args (without binary name)
+	CmdName    string   // "claude" or "gemini"
 }
 
 // New creates a new Sidecar instance.
@@ -53,6 +64,9 @@ func New(cfg Config) *Sidecar {
 		paneID:           cfg.PaneID,
 		childPID:         cfg.ChildPID,
 		socketPath:       cfg.SocketPath,
+		cmdPath:          cfg.CmdPath,
+		cmdArgs:          cfg.CmdArgs,
+		cmdName:          cfg.CmdName,
 		prevHashes:       make(map[string]bool),
 		lastTokenRefresh: time.Now(),
 	}
@@ -101,8 +115,16 @@ func (s *Sidecar) Run() {
 			}
 		}
 
-		// Heartbeat
-		s.heartbeat(childAlive)
+		// Heartbeat — check for restart signal
+		resp := s.heartbeat(childAlive)
+		if resp != nil {
+			if action, _ := resp["action"].(string); action == "restart" {
+				resumeID, _ := resp["resume_session_id"].(string)
+				log.Printf("[sidecar] Restart requested for %s (resume: %q)", s.agentID, resumeID)
+				s.doRestart(resumeID)
+				continue
+			}
+		}
 
 		// Poll and inject messages
 		messages := s.pollMessages()
@@ -129,6 +151,10 @@ func (s *Sidecar) Run() {
 		s.maybeRefreshToken()
 
 		if !childAlive {
+			if s.restarting {
+				s.restarting = false
+				continue // restart in progress, don't exit
+			}
 			log.Printf("[sidecar] Child PID %d exited, shutting down", s.childPID)
 			break
 		}
@@ -202,6 +228,92 @@ func (s *Sidecar) dedup(content string) string {
 	return joinLines(newLines)
 }
 
+// doRestart gracefully stops the child process and restarts it with --resume.
+func (s *Sidecar) doRestart(resumeID string) {
+	s.restarting = true
+
+	// Send SIGINT twice (graceful shutdown, like double Ctrl-C)
+	if proc, err := os.FindProcess(s.childPID); err == nil {
+		log.Printf("[sidecar] Sending SIGINT to child PID %d", s.childPID)
+		proc.Signal(syscall.SIGINT)
+		time.Sleep(500 * time.Millisecond)
+		proc.Signal(syscall.SIGINT)
+	}
+
+	// Wait for child to exit (up to 15 seconds)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if !s.pidAlive(s.childPID) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// SIGKILL fallback
+	if s.pidAlive(s.childPID) {
+		log.Printf("[sidecar] Child did not exit after SIGINT, sending SIGKILL")
+		if proc, err := os.FindProcess(s.childPID); err == nil {
+			proc.Signal(syscall.SIGKILL)
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	// Capture resume UUID from pane if not provided
+	if resumeID == "" {
+		resumeID = s.captureResumeID()
+	}
+
+	// Build new args with --resume
+	newArgs := make([]string, len(s.cmdArgs))
+	copy(newArgs, s.cmdArgs)
+	if resumeID != "" {
+		newArgs = append(newArgs, "--resume", resumeID)
+	}
+
+	// Start new child process
+	log.Printf("[sidecar] Restarting: %s %v", s.cmdPath, newArgs)
+	child := exec.Command(s.cmdPath, newArgs...)
+	child.Stdin = os.Stdin
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+	child.Env = os.Environ()
+
+	if err := child.Start(); err != nil {
+		log.Printf("[sidecar] ERROR: failed to restart child: %v", err)
+		s.restarting = false
+		return
+	}
+
+	s.childPID = child.Process.Pid
+	log.Printf("[sidecar] Restarted child PID %d", s.childPID)
+
+	// Notify server of new PID
+	s.client.Post("/sidecar/update-pid", map[string]interface{}{
+		"agent_id": s.agentID,
+		"new_pid":  s.childPID,
+	})
+
+	// Reset dedup state (new session = fresh output)
+	s.prevHashes = make(map[string]bool)
+	s.hashHistory = nil
+	s.restarting = false
+}
+
+var uuidRe = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// captureResumeID reads the pane and extracts the last UUID (session ID).
+func (s *Sidecar) captureResumeID() string {
+	content, err := tmux.CapturePane(s.paneID, 30)
+	if err != nil {
+		return ""
+	}
+	matches := uuidRe.FindAllString(content, -1)
+	if len(matches) > 0 {
+		return matches[len(matches)-1]
+	}
+	return ""
+}
+
 func (s *Sidecar) pushStream(content string) {
 	s.client.Post("/sidecar/stream-push", map[string]interface{}{
 		"agent_id": s.agentID,
@@ -209,14 +321,16 @@ func (s *Sidecar) pushStream(content string) {
 	})
 }
 
-func (s *Sidecar) heartbeat(childAlive bool) {
-	_, err := s.client.Post("/sidecar/heartbeat", map[string]interface{}{
+func (s *Sidecar) heartbeat(childAlive bool) map[string]interface{} {
+	resp, err := s.client.Post("/sidecar/heartbeat", map[string]interface{}{
 		"agent_id":    s.agentID,
 		"child_alive": childAlive,
 	})
 	if err != nil {
 		log.Printf("[sidecar] ERROR: heartbeat failed for %s: %v", s.agentID, err)
+		return nil
 	}
+	return resp
 }
 
 func (s *Sidecar) pollMessages() []map[string]interface{} {

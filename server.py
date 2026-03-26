@@ -54,6 +54,7 @@ class AgentEntry:
         "name", "pane_id", "pid", "hostname", "cwd", "cmd", "bio",
         "stream_file", "started_at", "teams",
         "last_heartbeat", "message_queue",
+        "restart_requested", "restart_resume_id", "restart_reason",
     )
 
     def __init__(self, name: str, pane_id: str, pid: int, cmd: list[str],
@@ -73,6 +74,9 @@ class AgentEntry:
         self.stream_file = STREAMS_DIR / f"{host_part}_{name}-{pane_num}-{pid}.md"
         self.started_at = datetime.now()
         self.teams: list[str] = []
+        self.restart_requested: bool = False
+        self.restart_resume_id: str = ""
+        self.restart_reason: str = ""
 
     @property
     def agent_id(self) -> str:
@@ -1224,6 +1228,52 @@ async def handle_sidecar_stream_push(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_sidecar_restart(request: web.Request) -> web.Response:
+    """Request restart of an agent's child process."""
+    registry: AgentRegistry = request.app["registry"]
+    try:
+        body = await request.json()
+        agent_id = body["agent_id"]
+    except (KeyError, json.JSONDecodeError) as e:
+        return web.json_response({"status": "error", "error": str(e)}, status=400)
+
+    entry = registry.agents.get(agent_id)
+    if not entry:
+        return web.json_response(
+            {"status": "error", "error": f"agent '{agent_id}' not found"}, status=404)
+
+    entry.restart_requested = True
+    entry.restart_resume_id = body.get("resume_session_id", "")
+    entry.restart_reason = body.get("reason", "")
+
+    print(f"[agentura] Restart requested for '{agent_id}'"
+          + (f" (resume: {entry.restart_resume_id})" if entry.restart_resume_id else "")
+          + (f" reason: {entry.restart_reason}" if entry.restart_reason else ""))
+    return web.json_response({"status": "ok"})
+
+
+async def handle_sidecar_update_pid(request: web.Request) -> web.Response:
+    """Update the child PID after a restart."""
+    registry: AgentRegistry = request.app["registry"]
+    try:
+        body = await request.json()
+        agent_id = body["agent_id"]
+        new_pid = int(body["new_pid"])
+    except (KeyError, json.JSONDecodeError, ValueError) as e:
+        return web.json_response({"status": "error", "error": str(e)}, status=400)
+
+    entry = registry.agents.get(agent_id)
+    if not entry:
+        return web.json_response(
+            {"status": "error", "error": f"agent '{agent_id}' not found"}, status=404)
+
+    old_pid = entry.pid
+    entry.pid = new_pid
+    entry.last_heartbeat = time.monotonic()
+    print(f"[agentura] Agent '{agent_id}' PID updated: {old_pid} → {new_pid}")
+    return web.json_response({"status": "ok"})
+
+
 async def handle_sidecar_heartbeat(request: web.Request) -> web.Response:
     """Heartbeat from sidecar."""
     registry: AgentRegistry = request.app["registry"]
@@ -1253,6 +1303,20 @@ async def handle_sidecar_heartbeat(request: web.Request) -> web.Response:
         for info in successions:
             await _notify_succession(registry, team_registry, info)
         return web.json_response({"status": "ok", "action": "removed"})
+
+    # Check for pending restart request
+    if entry.restart_requested:
+        resume_id = entry.restart_resume_id
+        entry.restart_requested = False
+        entry.restart_resume_id = ""
+        entry.restart_reason = ""
+        _append_to_stream(entry.stream_file,
+                          f"\n---\n*Agent restart requested at {_now()}*\n")
+        return web.json_response({
+            "status": "ok",
+            "action": "restart",
+            "resume_session_id": resume_id,
+        })
 
     return web.json_response({"status": "ok"})
 
@@ -1491,6 +1555,8 @@ async def main():
     # Sidecar endpoints (all agents)
     app.router.add_post("/sidecar/register", handle_sidecar_register)
     app.router.add_post("/sidecar/stream-push", handle_sidecar_stream_push)
+    app.router.add_post("/sidecar/restart", handle_sidecar_restart)
+    app.router.add_post("/sidecar/update-pid", handle_sidecar_update_pid)
     app.router.add_post("/sidecar/heartbeat", handle_sidecar_heartbeat)
     app.router.add_get("/sidecar/messages", handle_sidecar_messages)
     app.router.add_post("/sidecar/queue-message", handle_sidecar_queue_message)

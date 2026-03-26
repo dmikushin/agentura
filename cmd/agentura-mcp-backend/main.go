@@ -104,6 +104,8 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 		)
 	case "interrupt_agent":
 		return b.InterruptAgent(getString("target_agent_id"))
+	case "restart_agent":
+		return b.RestartAgent(getString("target_agent_id"), getString("resume_session_id"), getString("reason"))
 	case "broadcast_message":
 		return b.BroadcastMessage(getString("team_name"), getString("message"))
 

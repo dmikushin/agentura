@@ -257,6 +257,9 @@ func main() {
 			PaneID:     paneID,
 			ChildPID:   childPID,
 			SocketPath: sockPath,
+			CmdPath:    cmdPath,
+			CmdArgs:    args[1:],
+			CmdName:    cmdName,
 		})
 		sc.Run()
 	} else {
@@ -384,6 +387,7 @@ Your identity is in the AGENT_ID environment variable.
 - **read_board** — read the team's shared board (decisions, status, context)
 - **create_agent** — spawn a new agent on local or remote host
 - **read_stream** — read another agent's terminal output
+- **restart_agent** — restart an agent while preserving identity and session
 
 ### Social norms
 

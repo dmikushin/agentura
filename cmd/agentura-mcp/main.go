@@ -211,6 +211,41 @@ func registerTools(s *server.MCPServer) {
 	)
 
 	s.AddTool(
+		mcp.NewTool("restart_agent",
+			mcp.WithDescription(
+				"Restart an agent's AI process while preserving its identity and team membership.\n\n"+
+					"Gracefully stops the agent (double SIGINT, like pressing Ctrl-C twice), "+
+					"captures the session UUID from the terminal, and restarts with --resume "+
+					"to continue the conversation exactly where it left off.\n\n"+
+					"The agent keeps its agent_id, team membership, message queue, stream history, "+
+					"and sidecar connection. Only the child AI process restarts.\n\n"+
+					"**Use cases:**\n"+
+					"- Agent is stuck or unresponsive → restart to recover\n"+
+					"- MCP configuration changed → restart to reload tools\n"+
+					"- Self-restart → pass your own agent_id to refresh your context\n\n"+
+					"**Session switching (power feature):** Provide resume_session_id to restart "+
+					"into a DIFFERENT session entirely. This lets you:\n"+
+					"- Switch an agent between conversation threads\n"+
+					"- Roll back to an earlier session state\n"+
+					"- Recover a crashed agent using its last session UUID\n"+
+					"- Hand off context: give another agent YOUR session UUID via send_message, "+
+					"and they can restart into your conversation to pick up where you left off.",
+			),
+			mcp.WithString("target_agent_id",
+				mcp.Required(),
+				mcp.Description("agent to restart (hostname@cwd:PID from list_agents). Pass your own agent_id for self-restart."),
+			),
+			mcp.WithString("resume_session_id",
+				mcp.Description("specific session UUID to resume into. If omitted, auto-detects from terminal output. Provide this to switch to a completely different conversation."),
+			),
+			mcp.WithString("reason",
+				mcp.Description("why this restart is needed — logged to the team board so teammates know what happened"),
+			),
+		),
+		makeHandler("restart_agent"),
+	)
+
+	s.AddTool(
 		mcp.NewTool("post_to_board",
 			mcp.WithDescription("Post a note to the team's shared board.\n\nThe board is a persistent, append-only log visible to all team members.\nUse it for decisions, findings, status updates, and shared context."),
 			mcp.WithString("team_name",
