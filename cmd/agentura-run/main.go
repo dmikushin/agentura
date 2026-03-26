@@ -221,13 +221,22 @@ func main() {
 	os.Setenv("AGENTURA_SIDECAR_SOCK", sockPath)
 
 	// --- Ensure MCP config and context ---
+	// All env vars needed by agentura-mcp must be in the MCP config env,
+	// NOT relying on env inheritance — Gemini's sanitizeEnvironment filters
+	// vars matching /TOKEN/i, and Claude may also not pass all vars.
+	mcpEnv := map[string]string{
+		"AGENTURA_URL":          monitorURL,
+		"AGENTURA_SIDECAR_SOCK": sockPath,
+		"AGENT_ID":              agentID,
+		"AGENT_TOKEN":           agentToken,
+	}
 	switch cmdName {
 	case "claude":
-		ensureClaudeMCP(cwd, monitorURL, sockPath)
+		ensureClaudeMCP(cwd, mcpEnv)
 		ensureClaudeTrust(cwd)
 		ensureAgentContext(filepath.Join(cwd, ".claude", "CLAUDE.md"))
 	case "gemini":
-		ensureGeminiMCP(cwd, monitorURL, sockPath)
+		ensureGeminiMCP(cwd, mcpEnv)
 		ensureGeminiTrust(cwd)
 		ensureAgentContext(filepath.Join(cwd, ".gemini", "GEMINI.md"))
 	}
@@ -432,22 +441,11 @@ func ensureAgentContext(contextPath string) {
 	log.Printf("[agent-run] Agent context appended to %s", contextPath)
 }
 
-func ensureClaudeMCP(cwd, monitorURL, _ string) {
+func ensureClaudeMCP(cwd string, mcpEnv map[string]string) {
 	mcpPath := filepath.Join(cwd, ".mcp.json")
 	withFileLock(mcpPath, func() {
-		if existing, err := os.ReadFile(mcpPath); err == nil {
-			var data map[string]interface{}
-			if json.Unmarshal(existing, &data) == nil {
-				if servers, ok := data["mcpServers"].(map[string]interface{}); ok {
-					if _, has := servers["agentura"]; has {
-						return
-					}
-				}
-			}
-		}
-
 		entry := copyMap(agenturaServer)
-		entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+		entry["env"] = mcpEnv
 
 		mcpConfig := map[string]interface{}{
 			"mcpServers": map[string]interface{}{
@@ -464,7 +462,7 @@ func ensureClaudeMCP(cwd, monitorURL, _ string) {
 	})
 }
 
-func ensureGeminiMCP(cwd, monitorURL, _ string) {
+func ensureGeminiMCP(cwd string, mcpEnv map[string]string) {
 	geminiDir := filepath.Join(cwd, ".gemini")
 	configPath := filepath.Join(geminiDir, "settings.json")
 	os.MkdirAll(geminiDir, 0755)
@@ -484,12 +482,8 @@ func ensureGeminiMCP(cwd, monitorURL, _ string) {
 			data["mcpServers"] = servers
 		}
 
-		if _, exists := servers["agentura"]; exists {
-			return
-		}
-
 		entry := copyMap(agenturaServer)
-		entry["env"] = map[string]string{"AGENTURA_URL": monitorURL}
+		entry["env"] = mcpEnv
 		servers["agentura"] = entry
 
 		raw, _ := json.MarshalIndent(data, "", "  ")
