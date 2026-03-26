@@ -224,11 +224,14 @@ func main() {
 	// All env vars needed by agentura-mcp must be in the MCP config env,
 	// NOT relying on env inheritance — Gemini's sanitizeEnvironment filters
 	// vars matching /TOKEN/i, and Claude may also not pass all vars.
+	// AGENT_TOKEN intentionally excluded — it expires after 1h and
+	// cannot be refreshed from a static config. The MCP backend uses
+	// sidecar IPC (which manages its own token rotation) or falls back
+	// to SSH key auth for HTTPS.
 	mcpEnv := map[string]string{
 		"AGENTURA_URL":          monitorURL,
 		"AGENTURA_SIDECAR_SOCK": sockPath,
 		"AGENT_ID":              agentID,
-		"AGENT_TOKEN":           agentToken,
 	}
 	switch cmdName {
 	case "claude":
