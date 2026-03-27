@@ -402,6 +402,8 @@ Your identity is in the AGENT_ID environment variable.
 - **create_agent** — spawn a new agent on local or remote host
 - **read_stream** — read another agent's terminal output
 - **restart_agent** — restart an agent while preserving identity and session
+- **timenow** — check current server time and sprint status (same info shown automatically after every tool call)
+- **start_sprint** — (Scrum Master) start a sprint timer for the team
 
 ### Social norms
 

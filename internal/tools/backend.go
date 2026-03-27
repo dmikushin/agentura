@@ -320,6 +320,99 @@ func (b *Backend) handleTeamAssignment(newAgentID, team, senderAgentID string) s
 	return teamMsg
 }
 
+// TimeNow returns current server time + sprint status. Same output as agentura-clock hook.
+// Agents can call this manually via /timenow to check the clock.
+func (b *Backend) TimeNow() string {
+	// Get timezone
+	tzData, err := b.get("/timezone")
+	tz := "UTC"
+	if err == nil {
+		if t, ok := tzData["timezone"].(string); ok && t != "" {
+			tz = t
+		}
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+
+	// Get sprint info for agent's team
+	teams := b.getAgentTeams(b.agentID)
+	sprintStr := ""
+	for _, team := range teams {
+		data, err := b.get("/sprint?team_name=" + urlEncode(team))
+		if err != nil {
+			continue
+		}
+		sprintRaw, ok := data["sprint"]
+		if !ok || sprintRaw == nil {
+			continue
+		}
+		sprint, ok := sprintRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		startF, _ := sprint["start"].(float64)
+		durF, _ := sprint["duration_sec"].(float64)
+		if startF == 0 {
+			continue
+		}
+		sprintStart := time.Unix(int64(startF), 0)
+		sprintEnd := sprintStart.Add(time.Duration(int(durF)) * time.Second)
+		elapsed := time.Now().Sub(sprintStart)
+		remaining := sprintEnd.Sub(time.Now())
+		if remaining < 0 {
+			sprintStr = fmt.Sprintf("%s since sprint start, SPRINT OVERTIME by %s",
+				fmtDuration(elapsed), fmtDuration(-remaining))
+		} else {
+			sprintStr = fmt.Sprintf("%s since sprint start, %s left till sprint end",
+				fmtDuration(elapsed), fmtDuration(remaining))
+		}
+		break
+	}
+
+	if sprintStr != "" {
+		return fmt.Sprintf("TIME NOW: %s (%s)", now.Format("03:04PM"), sprintStr)
+	}
+	return fmt.Sprintf("TIME NOW: %s (no active sprint)", now.Format("03:04PM"))
+}
+
+// StartSprint sets a sprint timer on the server for a team. Scrum Master calls this.
+func (b *Backend) StartSprint(teamName string, durationMinutes int) string {
+	if teamName == "" {
+		return "Error: team_name is required"
+	}
+	if durationMinutes <= 0 {
+		durationMinutes = 30
+	}
+	resp, err := b.post("/sprint", map[string]interface{}{
+		"team_name":    teamName,
+		"duration_sec": durationMinutes * 60,
+		"_inject_agent_token": true,
+	})
+	if err != nil {
+		return fmt.Sprintf("Error starting sprint: %v", err)
+	}
+	if status, _ := resp["status"].(string); status == "ok" {
+		return fmt.Sprintf("Sprint started for team '%s': %d minutes", teamName, durationMinutes)
+	}
+	return fmt.Sprintf("Error: %v", resp)
+}
+
+func fmtDuration(d time.Duration) string {
+	if d <= 0 {
+		return "00s"
+	}
+	total := int(d.Seconds())
+	m := total / 60
+	s := total % 60
+	if m > 0 {
+		return fmt.Sprintf("%02dm%02ds", m, s)
+	}
+	return fmt.Sprintf("%02ds", s)
+}
+
 func sshRun(host, cmd string, timeout time.Duration) (string, string, error) {
 	ctx, cancel := timeoutCtx(timeout)
 	defer cancel()

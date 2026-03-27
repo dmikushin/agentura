@@ -147,6 +147,12 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 	case "search_board":
 		return b.SearchBoard(getString("team_name"), getString("query"), getInt("limit"))
 
+	// --- Clock / Sprint tools ---
+	case "timenow":
+		return b.TimeNow()
+	case "start_sprint":
+		return b.StartSprint(getString("team_name"), getInt("duration_minutes"))
+
 	default:
 		return fmt.Sprintf("Error: unknown tool '%s'", tool)
 	}

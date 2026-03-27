@@ -1510,6 +1510,30 @@ async def handle_timezone(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "timezone": tz})
 
 
+# --- Sprint bookkeeping ---
+# In-memory sprint state (per team). Scrum Master sets sprint via POST /sprint.
+_sprints: dict[str, dict] = {}  # team_name -> {"start": unix_ts, "duration_sec": int}
+
+
+async def handle_sprint_set(request: web.Request) -> web.Response:
+    """Set sprint start time and duration for a team. Called by Scrum Master."""
+    data = await request.json()
+    team = data.get("team_name", "")
+    duration = data.get("duration_sec", 1800)  # default 30 min
+    if not team:
+        return web.json_response({"status": "error", "error": "team_name required"}, status=400)
+    _sprints[team] = {"start": time.time(), "duration_sec": int(duration)}
+    return web.json_response({"status": "ok", "sprint": _sprints[team]})
+
+
+async def handle_sprint_get(request: web.Request) -> web.Response:
+    """Get current sprint info for a team. Called by agentura-clock."""
+    team = request.query.get("team_name", "")
+    if not team or team not in _sprints:
+        return web.json_response({"status": "ok", "sprint": None})
+    return web.json_response({"status": "ok", "sprint": _sprints[team]})
+
+
 # --- Main ---
 
 async def main():
@@ -1572,6 +1596,8 @@ async def main():
     app.router.add_post("/teams/board", handle_board_post)
     app.router.add_get("/teams/board", handle_board_read)
     app.router.add_get("/timezone", handle_timezone)
+    app.router.add_post("/sprint", handle_sprint_set)
+    app.router.add_get("/sprint", handle_sprint_get)
 
     runner = web.AppRunner(app)
     await runner.setup()

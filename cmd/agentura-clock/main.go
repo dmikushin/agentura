@@ -1,12 +1,10 @@
-// agentura-clock — post-tool-call hook that prints server time + elapsed time.
+// agentura-clock — post-tool-call hook that prints server time + sprint status.
 //
 // Called by Claude Code (postToolExecution) and Gemini CLI (AfterTool) hooks.
-// Output goes to stdout and appears in the agent's context after each tool call.
+// Also available as MCP tool /timenow for agents to call manually.
 //
-// State file: /tmp/agentura-clock-<AGENT_PID>.state (stores last call timestamp)
-// Timezone: fetched once from server, cached in state file.
-//
-// Output format: TIME NOW: 01:15PM (01m34s elapsed since last tool call)
+// Output format:
+//   TIME NOW: 01:15PM (01m34s spent on this tool call, 24m21s since sprint start, 5m39s left till sprint end)
 package main
 
 import (
@@ -15,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -23,17 +20,20 @@ import (
 type clockState struct {
 	Timezone     string `json:"tz"`
 	LastCallUnix int64  `json:"last_call"`
+	Team         string `json:"team"`
+}
+
+type sprintInfo struct {
+	Start       float64 `json:"start"`
+	DurationSec int     `json:"duration_sec"`
 }
 
 func main() {
-	// Find our state file keyed by parent PID (the sidecar/agentura-run)
-	// or by AGENT_ID for uniqueness
 	agentID := os.Getenv("AGENT_ID")
 	stateKey := agentID
 	if stateKey == "" {
 		stateKey = fmt.Sprintf("%d", os.Getppid())
 	}
-	// Sanitize for filename
 	stateKey = strings.ReplaceAll(stateKey, "/", "_")
 	stateKey = strings.ReplaceAll(stateKey, ":", "_")
 	statePath := fmt.Sprintf("/tmp/agentura-clock-%s.state", stateKey)
@@ -51,10 +51,15 @@ func main() {
 		state.Timezone = fetchTimezone()
 	}
 
-	// Calculate elapsed since last tool call
-	var elapsed time.Duration
+	// Detect team from env if not cached
+	if state.Team == "" {
+		state.Team = os.Getenv("AGENTURA_TEAM")
+	}
+
+	// Time spent on this tool call (since last AfterTool fired)
+	var toolDuration time.Duration
 	if state.LastCallUnix > 0 {
-		elapsed = now.Sub(time.Unix(state.LastCallUnix, 0))
+		toolDuration = now.Sub(time.Unix(state.LastCallUnix, 0))
 	}
 
 	// Update last call timestamp
@@ -65,32 +70,74 @@ func main() {
 		os.WriteFile(statePath, data, 0644)
 	}
 
-	// Format time in server timezone
+	// Format server time
 	loc, err := time.LoadLocation(state.Timezone)
 	if err != nil {
 		loc = time.UTC
 	}
 	serverNow := now.In(loc)
 
-	// Format elapsed
-	elapsedStr := formatElapsed(elapsed)
+	// Fetch sprint info
+	sprintStr := fetchSprintStr(state.Team, now)
+
+	// Tool call duration string
+	toolStr := "first call"
+	if toolDuration > 0 {
+		toolStr = fmt.Sprintf("%s spent on this tool call", fmtDur(toolDuration))
+	}
 
 	// Output
-	fmt.Printf("TIME NOW: %s (%s elapsed since last tool call)\n",
-		serverNow.Format("03:04PM"),
-		elapsedStr)
+	if sprintStr != "" {
+		fmt.Printf("TIME NOW: %s (%s, %s)\n", serverNow.Format("03:04PM"), toolStr, sprintStr)
+	} else {
+		fmt.Printf("TIME NOW: %s (%s)\n", serverNow.Format("03:04PM"), toolStr)
+	}
 }
 
-func formatElapsed(d time.Duration) string {
+func fmtDur(d time.Duration) string {
 	if d <= 0 {
-		return "first call"
+		return "00s"
 	}
-	m := int(d.Minutes())
-	s := int(d.Seconds()) % 60
+	total := int(d.Seconds())
+	m := total / 60
+	s := total % 60
 	if m > 0 {
 		return fmt.Sprintf("%02dm%02ds", m, s)
 	}
 	return fmt.Sprintf("%02ds", s)
+}
+
+func fetchSprintStr(team string, now time.Time) string {
+	if team == "" {
+		return ""
+	}
+	monitorURL := os.Getenv("AGENTURA_URL")
+	if monitorURL == "" {
+		return ""
+	}
+
+	url := strings.TrimSuffix(monitorURL, "/") + "/sprint?team_name=" + team
+	resp, err := httpGet(url)
+	if err != nil {
+		return ""
+	}
+
+	var result struct {
+		Sprint *sprintInfo `json:"sprint"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil || result.Sprint == nil {
+		return ""
+	}
+
+	sprintStart := time.Unix(int64(result.Sprint.Start), 0)
+	sprintEnd := sprintStart.Add(time.Duration(result.Sprint.DurationSec) * time.Second)
+	elapsed := now.Sub(sprintStart)
+	remaining := sprintEnd.Sub(now)
+
+	if remaining < 0 {
+		return fmt.Sprintf("%s since sprint start, SPRINT OVERTIME by %s", fmtDur(elapsed), fmtDur(-remaining))
+	}
+	return fmt.Sprintf("%s since sprint start, %s left till sprint end", fmtDur(elapsed), fmtDur(remaining))
 }
 
 func fetchTimezone() string {
@@ -98,59 +145,46 @@ func fetchTimezone() string {
 	if monitorURL == "" {
 		return "UTC"
 	}
-
-	token := os.Getenv("AGENTURA_TOKEN")
-	if token == "" {
-		// Try reading from sidecar socket or env
-		token = os.Getenv("AGENT_TOKEN")
-	}
-
 	url := strings.TrimSuffix(monitorURL, "/") + "/timezone"
-	req, err := http.NewRequest("GET", url, nil)
+	body, err := httpGet(url)
 	if err != nil {
 		return "UTC"
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "UTC"
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "UTC"
-	}
-
 	var result map[string]string
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "UTC"
 	}
-
 	if tz, ok := result["timezone"]; ok && tz != "" {
 		return tz
 	}
 	return "UTC"
 }
 
+func httpGet(url string) ([]byte, error) {
+	token := os.Getenv("AGENTURA_TOKEN")
+	if token == "" {
+		token = os.Getenv("AGENT_TOKEN")
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
 func init() {
-	// Ensure we don't hang — hard timeout
+	// Hard timeout — never block the agent
 	go func() {
 		time.Sleep(2 * time.Second)
 		os.Exit(0)
 	}()
-}
-
-// getenvInt helper
-func getenvInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
 }

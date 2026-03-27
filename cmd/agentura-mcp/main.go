@@ -455,4 +455,26 @@ func registerTools(s *server.MCPServer) {
 		),
 		makeHandler("force_succession"),
 	)
+
+	// --- Clock / Sprint tools ---
+	s.AddTool(
+		mcp.NewTool("timenow",
+			mcp.WithDescription("Check the current server time and sprint status.\n\nReturns: TIME NOW: HH:MMAM/PM (Xm since sprint start, Ym left till sprint end)\n\nCall this anytime you want to check how much time has passed or remains in the sprint. The same information is shown automatically after every tool call via the clock hook."),
+		),
+		makeHandler("timenow"),
+	)
+
+	s.AddTool(
+		mcp.NewTool("start_sprint",
+			mcp.WithDescription("Start a sprint timer for a team. Scrum Master should call this at the beginning of each sprint.\n\nAll team members will see sprint elapsed/remaining time after every tool call."),
+			mcp.WithString("team_name",
+				mcp.Required(),
+				mcp.Description("name of the team"),
+			),
+			mcp.WithNumber("duration_minutes",
+				mcp.Description("sprint duration in minutes (default: 30)"),
+			),
+		),
+		makeHandler("start_sprint"),
+	)
 }
