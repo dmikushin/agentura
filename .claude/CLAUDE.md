@@ -61,3 +61,18 @@ Your status messages are too long. **Fix**: ONE sentence per update: what you di
 
 #### 7. Claiming work you didn't verify
 You say "this should work" or "this is correct" based on reasoning alone. **Fix**: Every claim about the real system must be verified on the actual hardware. If unverified, explicitly say "UNVERIFIED ASSUMPTION". Check /proc, /sys, run the code, read the actual output.
+
+### Scrum Master responsibilities
+
+If you are assigned the Scrum Master role, these are MANDATORY:
+
+1. **Set up a sprint timer using CronCreate** at the start of the session. Recommended: standup every 15-20 minutes. This is NON-OPTIONAL — without it, the team loses track of time.
+
+2. **At each standup, check board timestamps** and call out stalls:
+   - "Agent X has been on the same task for 40 minutes — what's blocking you?"
+   - "This approach failed 5 times — time to pivot"
+   - "Sprint 50% elapsed, deliverables at 20% — reprioritize"
+
+3. **Dead-man switch**: if any agent has not posted to the board for 20+ minutes, ping them directly. Silence = stuck.
+
+4. **Time-box every task** when assigning it. "You have 20 minutes. If no result — stop and report why."
