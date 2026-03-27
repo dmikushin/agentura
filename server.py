@@ -37,6 +37,7 @@ REGISTRY_PATH = STREAMS_DIR / "_registry.json"
 BOARDS_DIR = DATA_DIR / "boards"
 HOSTS_PATH = DATA_DIR / "hosts.json"
 SKILLS_DIR = Path(os.environ.get("SKILLS_DIR", "/app/skills"))
+CONTEXT_DIR = Path(os.environ.get("CONTEXT_DIR", "/app/context"))
 AUTH_KEYS_PATH = os.environ.get("AUTHORIZED_KEYS", "/app/secrets/authorized_keys")
 
 # --- Server settings ---
@@ -1472,6 +1473,16 @@ async def handle_board_read(request: web.Request) -> web.Response:
 
 # --- Skill endpoints ---
 
+async def handle_context(request: web.Request) -> web.Response:
+    """Serve agent context files (CLAUDE.md, GEMINI.md)."""
+    name = request.match_info["name"]
+    path = CONTEXT_DIR / name
+    if not path.is_file() or not path.resolve().is_relative_to(CONTEXT_DIR.resolve()):
+        return web.json_response(
+            {"status": "error", "error": f"Context '{name}' not found"}, status=404)
+    return web.json_response({"status": "ok", "name": name, "content": path.read_text()})
+
+
 async def handle_skills_list(request: web.Request) -> web.Response:
     skills = [f.name for f in SKILLS_DIR.glob("*.md")] if SKILLS_DIR.is_dir() else []
     return web.json_response({"status": "ok", "skills": skills})
@@ -1571,6 +1582,7 @@ async def main():
     app.router.add_get("/stream/{pane_id}", handle_stream)
     app.router.add_get("/skills", handle_skills_list)
     app.router.add_get("/skills/{name}", handle_skill)
+    app.router.add_get("/context/{name}", handle_context)
     app.router.add_get("/teams", handle_teams_list)
     app.router.add_post("/teams", handle_team_create)
     app.router.add_post("/teams/join", handle_team_join_gone)

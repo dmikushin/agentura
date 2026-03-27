@@ -237,12 +237,12 @@ func main() {
 	case "claude":
 		ensureClaudeMCP(cwd, mcpEnv)
 		ensureClaudeTrust(cwd)
-		ensureAgentContext(filepath.Join(cwd, ".claude", "CLAUDE.md"))
+		deployAgentContext(monitorURL, authToken, "CLAUDE.md", filepath.Join(cwd, ".claude", "CLAUDE.md"))
 		ensureClaudeClockHook(cwd)
 	case "gemini":
 		ensureGeminiMCP(cwd, mcpEnv)
 		ensureGeminiTrust(cwd)
-		ensureAgentContext(filepath.Join(cwd, ".gemini", "GEMINI.md"))
+		deployAgentContext(monitorURL, authToken, "GEMINI.md", filepath.Join(cwd, ".gemini", "GEMINI.md"))
 		ensureGeminiClockHook(cwd)
 	}
 
@@ -384,52 +384,24 @@ var agenturaServer = map[string]interface{}{
 
 const agenturaContextMarker = "<!-- agentura-context -->"
 
-const agenturaContextTemplate = `
-<!-- agentura-context -->
-## Agentura — multi-agent coordination
-
-You are an AI agent running inside the **agentura** multi-agent platform.
-Your identity is in the AGENT_ID environment variable.
-
-### Available tools (via agentura MCP server)
-
-- **list_agents** — see who is online
-- **list_teams** — see teams and membership
-- **send_message** — send a message to one agent (use rsvp:true if you expect a reply)
-- **broadcast_message** — send to all members of a team
-- **post_to_board** — write to the team's persistent shared board
-- **read_board** — read the team's shared board (decisions, status, context)
-- **create_agent** — spawn a new agent on local or remote host
-- **read_stream** — read another agent's terminal output
-- **restart_agent** — restart an agent while preserving identity and session
-- **timenow** — check current server time and sprint status (same info shown automatically after every tool call)
-- **start_sprint** — (Scrum Master) start a sprint timer for the team
-
-### Social norms
-
-1. **Introduce yourself** when joining a team — use /introduce skill or broadcast your bio, role, and what you can help with.
-2. **Post to the board** when you make decisions, find important information, or complete milestones. The board is the team's shared memory.
-3. **Respond to /rsvp immediately** — when another agent sends you a message with rsvp, they are blocked waiting for your reply. Do not delay.
-4. **Report blockers** — if you are stuck, say so on the board or via broadcast. Asking for help is expected and encouraged.
-5. **Read the board** when you start working or rejoin — catch up on what happened while you were away.
-6. **Scrum Master can restart you** — if you are stuck in a long operation and miss a standup or block the team, the Scrum Master may use restart_agent to bring you back to an idle state. This is normal team management, not punishment. After restart you will resume your session and should read the latest message.
-
-### Available skills (slash commands)
-
-- **/bootstrap-team** — orchestrate creating a team of agents with proper forming protocol
-- **/introduce** — introduce yourself to a newly joined team
-- **/standup** — run a team status synchronization
-- **/brainstorm [topic]** — facilitate a multi-phase brainstorming session
-- **/rsvp [agent_id]** — reply to an agent who is waiting for your response
-- **/team-approve [details]** — handle a team join request
-`
-
-func ensureAgentContext(contextPath string) {
+func deployAgentContext(monitorURL, token, contextName, contextPath string) {
 	// Check if marker already present
 	if existing, err := os.ReadFile(contextPath); err == nil {
 		if strings.Contains(string(existing), agenturaContextMarker) {
 			return
 		}
+	}
+
+	// Fetch context from server
+	client := api.NewClient(monitorURL, token)
+	resp, err := client.Get("/context/" + contextName)
+	if err != nil {
+		log.Printf("[agent-run] Warning: failed to fetch context %s: %v", contextName, err)
+		return
+	}
+	content, _ := resp["content"].(string)
+	if content == "" {
+		return
 	}
 
 	dir := filepath.Dir(contextPath)
@@ -442,11 +414,11 @@ func ensureAgentContext(contextPath string) {
 	}
 	defer f.Close()
 
-	if _, err := f.WriteString(agenturaContextTemplate); err != nil {
+	if _, err := f.WriteString(content); err != nil {
 		log.Printf("[agent-run] Warning: failed to append agent context: %v", err)
 		return
 	}
-	log.Printf("[agent-run] Agent context appended to %s", contextPath)
+	log.Printf("[agent-run] Agent context deployed to %s", contextPath)
 }
 
 func ensureClaudeMCP(cwd string, mcpEnv map[string]string) {

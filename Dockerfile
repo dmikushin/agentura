@@ -10,6 +10,8 @@ RUN pacman-key --init && pacman-key --populate archlinux && \
 WORKDIR /app
 COPY server.py auth.py ogham_board.py ./
 COPY .claude/commands/ /app/skills/
+COPY .claude/CLAUDE.md /app/context/CLAUDE.md
+COPY .gemini/GEMINI.md /app/context/GEMINI.md
 
 RUN mkdir -p /data/streams && chown -R 1000:1000 /data
 
