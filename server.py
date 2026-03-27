@@ -1421,7 +1421,7 @@ async def handle_hosts(request: web.Request) -> web.Response:
 # --- Team board endpoints ---
 
 async def handle_board_post(request: web.Request) -> web.Response:
-    """Append a note to the team board. Requires Bearer auth."""
+    """Store a note on the team board (ogham semantic memory)."""
     team_reg: TeamRegistry = request.app["team_registry"]
     try:
         body = await request.json()
@@ -1440,20 +1440,17 @@ async def handle_board_post(request: web.Request) -> web.Response:
         return web.json_response(
             {"status": "error", "error": f"'{sender}' is not a member of team '{team_name}'"}, status=403)
 
-    BOARDS_DIR.mkdir(parents=True, exist_ok=True)
-    board_file = BOARDS_DIR / f"{team_name}.jsonl"
-    entry = json.dumps({"author": sender, "text": text, "timestamp": _now()})
-    with open(board_file, "a") as f:
-        f.write(entry + "\n")
-
-    return web.json_response({"status": "ok"})
+    import ogham_board
+    result = ogham_board.post(team_name, sender, text)
+    return web.json_response(result)
 
 
 async def handle_board_read(request: web.Request) -> web.Response:
-    """Read team board entries. Requires Bearer auth."""
+    """Read or search team board entries (ogham semantic memory)."""
     team_reg: TeamRegistry = request.app["team_registry"]
     team_name = request.query.get("team_name", "")
-    since = int(request.query.get("since", "0"))
+    query = request.query.get("q", "")
+    limit = int(request.query.get("limit", "50"))
 
     if not team_name:
         return web.json_response(
@@ -1464,24 +1461,13 @@ async def handle_board_read(request: web.Request) -> web.Response:
         return web.json_response(
             {"status": "error", "error": f"team '{team_name}' not found"}, status=404)
 
-    board_file = BOARDS_DIR / f"{team_name}.jsonl"
-    entries = []
-    if board_file.is_file():
-        lines = board_file.read_text().splitlines()
-        for line in lines[since:]:
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        total = len(lines)
+    import ogham_board
+    if query:
+        result = ogham_board.search(team_name, query, limit=limit)
     else:
-        total = 0
+        result = ogham_board.recent(team_name, limit=limit)
 
-    return web.json_response({
-        "status": "ok",
-        "entries": entries,
-        "total": total,
-    })
+    return web.json_response(result)
 
 
 # --- Skill endpoints ---

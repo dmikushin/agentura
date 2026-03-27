@@ -69,6 +69,14 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 		}
 		return ""
 	}
+	getInt := func(key string) int {
+		if v, ok := args[key]; ok {
+			if f, ok := v.(float64); ok {
+				return int(f)
+			}
+		}
+		return 0
+	}
 	getBool := func(key string, def bool) bool {
 		if v, ok := args[key]; ok {
 			if b, ok := v.(bool); ok {
@@ -135,7 +143,9 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 	case "post_to_board":
 		return b.PostToBoard(getString("team_name"), getString("text"))
 	case "read_board":
-		return b.ReadBoard(getString("team_name"))
+		return b.ReadBoard(getString("team_name"), getInt("limit"))
+	case "search_board":
+		return b.SearchBoard(getString("team_name"), getString("query"), getInt("limit"))
 
 	default:
 		return fmt.Sprintf("Error: unknown tool '%s'", tool)

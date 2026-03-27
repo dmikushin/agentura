@@ -262,13 +262,38 @@ func registerTools(s *server.MCPServer) {
 
 	s.AddTool(
 		mcp.NewTool("read_board",
-			mcp.WithDescription("Read the team's shared board.\n\nReturns all entries with timestamps and authors.\nUse this to catch up on team context and decisions."),
+			mcp.WithDescription("Read the team's shared board.\n\nReturns recent entries with timestamps, authors, and importance scores.\nThe board is backed by semantic memory — entries are searchable and auto-linked.\nUse this to catch up on team context and decisions."),
 			mcp.WithString("team_name",
 				mcp.Required(),
 				mcp.Description("name of the team"),
 			),
+			mcp.WithNumber("limit",
+				mcp.Description("max entries to return (default 50)"),
+			),
 		),
 		makeHandler("read_board"),
+	)
+
+	s.AddTool(
+		mcp.NewTool("search_board",
+			mcp.WithDescription("Search the team board using semantic + full-text hybrid search.\n\n"+
+				"Finds entries by meaning, not just keywords. Powered by pgvector embeddings "+
+				"and PostgreSQL full-text search with Reciprocal Rank Fusion scoring.\n\n"+
+				"Use this when you need to find specific information on a large board — "+
+				"much faster and more relevant than reading all entries."),
+			mcp.WithString("team_name",
+				mcp.Required(),
+				mcp.Description("name of the team"),
+			),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("what to search for — can be a question, keywords, or a description of what you're looking for"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("max results to return (default 20)"),
+			),
+		),
+		makeHandler("search_board"),
 	)
 
 	s.AddTool(

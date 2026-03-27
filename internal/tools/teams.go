@@ -445,9 +445,12 @@ func (b *Backend) PostToBoard(teamName, text string) string {
 	return fmt.Sprintf("Error: %s", errMsg)
 }
 
-// ReadBoard reads entries from the team's shared board.
-func (b *Backend) ReadBoard(teamName string) string {
-	resp, err := b.get(fmt.Sprintf("/teams/board?team_name=%s", urlEncode(teamName)))
+// ReadBoard reads recent entries from the team's shared board.
+func (b *Backend) ReadBoard(teamName string, limit int) string {
+	if limit <= 0 {
+		limit = 50
+	}
+	resp, err := b.get(fmt.Sprintf("/teams/board?team_name=%s&limit=%d", urlEncode(teamName), limit))
 	if err != nil {
 		if httpErr, ok := err.(*api.HTTPError); ok && httpErr.StatusCode == 404 {
 			return fmt.Sprintf("Error: team '%s' not found", teamName)
@@ -460,6 +463,32 @@ func (b *Backend) ReadBoard(teamName string) string {
 		return fmt.Sprintf("Team '%s' board is empty.", teamName)
 	}
 
+	return fmt.Sprintf("Team '%s' board (%d entries):\n\n%s", teamName, len(entries), formatBoardEntries(entries))
+}
+
+// SearchBoard searches the team board using semantic + full-text hybrid search.
+func (b *Backend) SearchBoard(teamName, query string, limit int) string {
+	if limit <= 0 {
+		limit = 20
+	}
+	resp, err := b.get(fmt.Sprintf("/teams/board?team_name=%s&q=%s&limit=%d",
+		urlEncode(teamName), urlEncode(query), limit))
+	if err != nil {
+		if httpErr, ok := err.(*api.HTTPError); ok && httpErr.StatusCode == 404 {
+			return fmt.Sprintf("Error: team '%s' not found", teamName)
+		}
+		return fmt.Sprintf("Error: %v", err)
+	}
+
+	entries, _ := resp["entries"].([]interface{})
+	if len(entries) == 0 {
+		return fmt.Sprintf("No results for '%s' on team '%s' board.", query, teamName)
+	}
+
+	return fmt.Sprintf("Search '%s' on '%s' board (%d results):\n\n%s", query, teamName, len(entries), formatBoardEntries(entries))
+}
+
+func formatBoardEntries(entries []interface{}) string {
 	var lines []string
 	for _, e := range entries {
 		entry, ok := e.(map[string]interface{})
@@ -471,6 +500,5 @@ func (b *Backend) ReadBoard(teamName string) string {
 		ts, _ := entry["timestamp"].(string)
 		lines = append(lines, fmt.Sprintf("[%s] **%s**: %s", ts, author, text))
 	}
-
-	return fmt.Sprintf("Team '%s' board (%d entries):\n\n%s", teamName, len(entries), strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
