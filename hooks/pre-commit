@@ -36,6 +36,10 @@ fi
 python3 tests/test_read_stream.py
 python3 tests/test_chat.py
 python3 tests/test_remote.py
+python3 tests/test_broadcast.py
+python3 tests/test_board.py
+python3 tests/test_teams_auth.py
+python3 tests/test_sprint.py
 # Only stop if we started it
 if [ "$STARTED_BY_HOOK" = "1" ]; then
     docker compose down 2>/dev/null
