@@ -21,6 +21,8 @@ services:
       - EMBEDDING_PROVIDER=ollama
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_EMBED_MODEL=nomic-embed-text
+      - EMBEDDING_DIM=768
+      - EMBEDDING_CACHE_DIR=/data/embedding_cache
     depends_on:
       postgres:
         condition: service_healthy

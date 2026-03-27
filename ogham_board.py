@@ -56,7 +56,7 @@ def post(team_name: str, author: str, text: str, tags: list[str] | None = None) 
             metadata={"author": author, "board_entry": True},
             auto_link=True,
         )
-        return {"status": "ok", "id": result.get("id", "")}
+        return {"status": "ok", "id": str(result.get("id", ""))}
     except Exception as e:
         logger.error(f"ogham store failed: {e}")
         return {"status": "error", "error": str(e)}
@@ -112,10 +112,10 @@ def _format_entry(mem: dict) -> dict:
     """Convert ogham memory to board entry format."""
     metadata = mem.get("metadata") or {}
     return {
-        "id": mem.get("id", ""),
+        "id": str(mem.get("id", "")),
         "author": metadata.get("author", mem.get("source", "")),
         "text": mem.get("content", ""),
-        "timestamp": mem.get("created_at", ""),
+        "timestamp": str(mem.get("created_at", "")),
         "importance": mem.get("importance"),
         "tags": mem.get("tags", []),
         "similarity": mem.get("similarity"),  # present in search results

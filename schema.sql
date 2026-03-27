@@ -9,7 +9,7 @@ create extension if not exists vector with schema public;
 create table if not exists memories (
     id uuid primary key default gen_random_uuid(),
     content text not null,
-    embedding vector(512),
+    embedding vector(768),
     metadata jsonb default '{}'::jsonb,
     source text,
     profile text not null default 'default',
@@ -36,7 +36,7 @@ alter table memories alter column metadata set compression lz4;
 
 -- HNSW index for fast cosine similarity search
 create index if not exists memories_embedding_idx
-    on memories using hnsw ((embedding::halfvec(512)) halfvec_cosine_ops)
+    on memories using hnsw ((embedding::halfvec(768)) halfvec_cosine_ops)
     with (m = 16, ef_construction = 64);
 
 -- GIN indexes for filtering
@@ -106,7 +106,7 @@ CREATE INDEX idx_relationships_auto
 -- RPC: auto-link a new memory to similar existing memories
 CREATE OR REPLACE FUNCTION auto_link_memory(
     new_memory_id uuid,
-    new_embedding vector(512),
+    new_embedding vector(768),
     link_threshold float DEFAULT 0.85,
     max_links int DEFAULT 5,
     filter_profile text DEFAULT 'default'
@@ -117,13 +117,13 @@ SECURITY INVOKER
 SET search_path = public, extensions
 AS $$
     WITH candidates AS (
-        SELECT m.id, (1 - (m.embedding::halfvec(512) <=> new_embedding::halfvec(512)))::float AS similarity
+        SELECT m.id, (1 - (m.embedding::halfvec(768) <=> new_embedding::halfvec(768)))::float AS similarity
         FROM memories m
         WHERE m.id != new_memory_id
           AND m.profile = filter_profile
           AND (m.expires_at IS NULL OR m.expires_at > now())
-          AND 1 - (m.embedding::halfvec(512) <=> new_embedding::halfvec(512)) > link_threshold
-        ORDER BY m.embedding::halfvec(512) <=> new_embedding::halfvec(512)
+          AND 1 - (m.embedding::halfvec(768) <=> new_embedding::halfvec(768)) > link_threshold
+        ORDER BY m.embedding::halfvec(768) <=> new_embedding::halfvec(768)
         LIMIT max_links
     ),
     inserted AS (
@@ -239,7 +239,7 @@ $$;
 
 -- RPC function for cosine similarity search with ACT-R temporal scoring
 create or replace function match_memories(
-    query_embedding vector(512),
+    query_embedding vector(768),
     match_threshold float default 0.7,
     match_count int default 10,
     filter_tags text[] default null,
@@ -274,13 +274,13 @@ begin
         m.source,
         m.profile,
         m.tags,
-        (1 - (m.embedding::halfvec(512) <=> query_embedding::halfvec(512)))::float as similarity,
+        (1 - (m.embedding::halfvec(768) <=> query_embedding::halfvec(768)))::float as similarity,
         -- Relevance = similarity * softplus(ACT-R) * confidence * graph_boost
         -- ACT-R: B(M) = ln(n+1) - 0.5 * ln(ageDays / (n+1))
         -- softplus: ln(1 + exp(B)) keeps score positive
         -- graph_boost: (1 + sum(relationship_strength) * 0.2)
         (
-            (1 - (m.embedding::halfvec(512) <=> query_embedding::halfvec(512))) *
+            (1 - (m.embedding::halfvec(768) <=> query_embedding::halfvec(768))) *
             ln(1.0 + exp(
                 ln(m.access_count + 1.0) -
                 0.5 * ln(
@@ -305,7 +305,7 @@ begin
         where r.target_id = m.id or r.source_id = m.id
     ) g on true
     where
-        1 - (m.embedding::halfvec(512) <=> query_embedding::halfvec(512)) > match_threshold
+        1 - (m.embedding::halfvec(768) <=> query_embedding::halfvec(768)) > match_threshold
         and (filter_tags is null or m.tags && filter_tags)
         and (filter_source is null or m.source = filter_source)
         and m.profile = filter_profile
@@ -339,13 +339,13 @@ AS $function$
 with semantic as (
     select
         m.id,
-        (1 - (m.embedding::halfvec(512) <=> query_embedding::halfvec(512)))::float as similarity
+        (1 - (m.embedding::halfvec(768) <=> query_embedding::halfvec(768)))::float as similarity
     from memories m
     where m.profile = filter_profile
       and (filter_tags is null or m.tags && filter_tags)
       and (filter_source is null or m.source = filter_source)
       and (m.expires_at is null or m.expires_at > now())
-    order by m.embedding::halfvec(512) <=> query_embedding::halfvec(512)
+    order by m.embedding::halfvec(768) <=> query_embedding::halfvec(768)
     limit match_count * 3
 ),
 keyword as (
@@ -449,7 +449,7 @@ $$;
 -- RPC: batch update embeddings (reduces N+1 round trips in re_embed_all)
 create or replace function batch_update_embeddings(
     memory_ids uuid[],
-    new_embeddings vector(512)[]
+    new_embeddings vector(768)[]
 )
 returns integer
 language plpgsql
@@ -475,7 +475,7 @@ $$;
 -- indicating whether each embedding has a match above threshold.
 -- Uses a simple cosine similarity check (no ACT-R scoring needed for dedup).
 create or replace function batch_check_duplicates(
-    query_embeddings vector(512)[],
+    query_embeddings vector(768)[],
     match_threshold float default 0.8,
     filter_profile text default 'default'
 )
@@ -497,7 +497,7 @@ begin
             select 1 from memories m
             where m.profile = filter_profile
               and (m.expires_at is null or m.expires_at > now())
-              and 1 - (m.embedding::halfvec(512) <=> query_embeddings[i]::halfvec(512)) > match_threshold
+              and 1 - (m.embedding::halfvec(768) <=> query_embeddings[i]::halfvec(768)) > match_threshold
             limit 1
         ) into found;
         results := array_append(results, found);
@@ -571,7 +571,7 @@ $$;
 -- RPC: explore knowledge graph — hybrid search seeds + relationship traversal
 CREATE OR REPLACE FUNCTION explore_memory_graph(
     query_text text,
-    query_embedding vector(512),
+    query_embedding vector(768),
     filter_profile text DEFAULT 'default',
     match_count int DEFAULT 5,
     traversal_depth int DEFAULT 1,

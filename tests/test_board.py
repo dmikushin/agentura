@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-test_board.py — tests for team board (persistent shared context).
+test_board.py — tests for team board (ogham semantic memory backend).
 
-Prerequisites: docker compose up -d (agentura server running)
+Prerequisites: docker compose up -d (agentura server + postgres + ollama running)
 """
 
 import json
@@ -54,7 +54,7 @@ def _ensure_auth():
 def get(path):
     _ensure_auth()
     req = urllib.request.Request(f"{MONITOR_URL}{path}", headers=_auth_headers)
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -68,7 +68,7 @@ def post(path, data):
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -83,7 +83,7 @@ def post_expect_error(path, data, expected_code):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         body = json.loads(e.read().decode()) if e.readable() else {}
@@ -150,40 +150,52 @@ def main():
         resp = get(f"/teams/board?team_name={encoded}")
         check("empty board returns ok", resp.get("status") == "ok")
         check("no entries", len(resp.get("entries", [])) == 0)
-        check("total is 0", resp.get("total") == 0)
 
         # --- Test: post to board ---
         print("\n[test] Post to board...")
         resp = post("/teams/board", {
             "team_name": team_name,
-            "text": "First note from A",
+            "text": "First note from agent A about the database migration plan",
             "sender": agent_a,
         })
-        check("post succeeds", resp.get("status") == "ok")
+        check("post succeeds", resp.get("status") == "ok", str(resp))
 
         resp = post("/teams/board", {
             "team_name": team_name,
-            "text": "Second note from B",
+            "text": "Second note from agent B about frontend CSS refactoring",
             "sender": agent_b,
         })
-        check("second post succeeds", resp.get("status") == "ok")
+        check("second post succeeds", resp.get("status") == "ok", str(resp))
 
-        # --- Test: read board ---
-        print("\n[test] Read board...")
+        # Small delay for ogham to process embeddings
+        time.sleep(1)
+
+        # --- Test: read board (recent) ---
+        print("\n[test] Read board (recent)...")
         resp = get(f"/teams/board?team_name={encoded}")
         entries = resp.get("entries", [])
-        check("2 entries", len(entries) == 2, f"got {len(entries)}")
-        check("first entry from A", entries[0].get("author") == agent_a if entries else False)
-        check("first entry text", entries[0].get("text") == "First note from A" if entries else False)
-        check("second entry from B", entries[1].get("author") == agent_b if len(entries) > 1 else False)
-        check("total is 2", resp.get("total") == 2)
+        check("entries returned", len(entries) >= 2, f"got {len(entries)}")
+        if entries:
+            check("entries have author", all("author" in e for e in entries))
+            check("entries have text", all("text" in e for e in entries))
+            check("entries have timestamp", all("timestamp" in e for e in entries))
 
-        # --- Test: read with since offset ---
-        print("\n[test] Read with offset...")
-        resp = get(f"/teams/board?team_name={encoded}&since=1")
+        # --- Test: read board with limit ---
+        print("\n[test] Read board with limit...")
+        resp = get(f"/teams/board?team_name={encoded}&limit=1")
         entries = resp.get("entries", [])
-        check("1 entry with since=1", len(entries) == 1, f"got {len(entries)}")
-        check("entry is from B", entries[0].get("author") == agent_b if entries else False)
+        check("limit=1 returns 1 entry", len(entries) == 1, f"got {len(entries)}")
+
+        # --- Test: search board ---
+        print("\n[test] Search board...")
+        resp = get(f"/teams/board?team_name={encoded}&q=database+migration")
+        entries = resp.get("entries", [])
+        check("search returns results", len(entries) >= 1, f"got {len(entries)}")
+        if entries:
+            check("search finds relevant entry",
+                  "database" in entries[0].get("text", "").lower() or
+                  "migration" in entries[0].get("text", "").lower(),
+                  entries[0].get("text", "")[:80])
 
         # --- Test: non-member post fails ---
         print("\n[test] Non-member post...")
