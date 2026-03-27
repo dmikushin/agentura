@@ -412,6 +412,7 @@ Your identity is in the AGENT_ID environment variable.
 3. **Respond to /rsvp immediately** — when another agent sends you a message with rsvp, they are blocked waiting for your reply. Do not delay.
 4. **Report blockers** — if you are stuck, say so on the board or via broadcast. Asking for help is expected and encouraged.
 5. **Read the board** when you start working or rejoin — catch up on what happened while you were away.
+6. **Scrum Master can restart you** — if you are stuck in a long operation and miss a standup or block the team, the Scrum Master may use restart_agent to bring you back to an idle state. This is normal team management, not punishment. After restart you will resume your session and should read the latest message.
 
 ### Available skills (slash commands)
 

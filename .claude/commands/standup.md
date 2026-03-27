@@ -21,6 +21,8 @@ Set `rsvp: true` so you receive responses directly.
 
 Wait for responses from all team members. Set a reasonable timeout (30 seconds). Track who responded and who didn't.
 
+**If an agent does not respond within the timeout**, they are likely stuck in a long-running operation. As Scrum Master you have the authority to **restart them** using `restart_agent` with their agent_id and reason "standup attendance required". The restarted agent will be idle and ready to receive your standup message immediately — resend the standup request via `send_message` right after the restart.
+
 ### Step 3: Compile the summary
 
 For each respondent, extract:
