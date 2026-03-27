@@ -238,10 +238,12 @@ func main() {
 		ensureClaudeMCP(cwd, mcpEnv)
 		ensureClaudeTrust(cwd)
 		ensureAgentContext(filepath.Join(cwd, ".claude", "CLAUDE.md"))
+		ensureClaudeClockHook(cwd)
 	case "gemini":
 		ensureGeminiMCP(cwd, mcpEnv)
 		ensureGeminiTrust(cwd)
 		ensureAgentContext(filepath.Join(cwd, ".gemini", "GEMINI.md"))
+		ensureGeminiClockHook(cwd)
 	}
 
 	// --- Launch child subprocess, main goroutine becomes sidecar ---
@@ -560,6 +562,97 @@ func withFileLock(path string, fn func()) {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
 	fn()
+}
+
+func ensureClaudeClockHook(cwd string) {
+	// Claude Code uses .claude/settings.json for hooks
+	dir := filepath.Join(cwd, ".claude")
+	os.MkdirAll(dir, 0755)
+	configPath := filepath.Join(dir, "settings.json")
+
+	var data map[string]interface{}
+	if raw, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(raw, &data)
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// Check if hook already exists
+	if hooks, ok := data["hooks"].(map[string]interface{}); ok {
+		if _, ok := hooks["postToolExecution"]; ok {
+			return // already configured
+		}
+	}
+
+	hooks, _ := data["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = make(map[string]interface{})
+		data["hooks"] = hooks
+	}
+
+	hooks["postToolExecution"] = []interface{}{
+		map[string]interface{}{
+			"command": "agentura-clock",
+			"timeout": 2000,
+		},
+	}
+
+	raw, _ := json.MarshalIndent(data, "", "  ")
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		log.Printf("[agent-run] Warning: failed to write Claude clock hook: %v", err)
+		return
+	}
+	log.Printf("[agent-run] Claude clock hook configured in %s", configPath)
+}
+
+func ensureGeminiClockHook(cwd string) {
+	// Gemini CLI uses .gemini/settings.json with AfterTool hook
+	dir := filepath.Join(cwd, ".gemini")
+	configPath := filepath.Join(dir, "settings.json")
+
+	var data map[string]interface{}
+	if raw, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(raw, &data)
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// Check if hook already exists
+	if hooks, ok := data["hooks"].(map[string]interface{}); ok {
+		if _, ok := hooks["AfterTool"]; ok {
+			return // already configured
+		}
+	}
+
+	hooks, _ := data["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = make(map[string]interface{})
+		data["hooks"] = hooks
+	}
+
+	hooks["AfterTool"] = []interface{}{
+		map[string]interface{}{
+			"matcher": "*",
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"name":    "agentura-clock",
+					"type":    "command",
+					"command": "agentura-clock",
+					"timeout": 2000,
+				},
+			},
+		},
+	}
+
+	os.MkdirAll(dir, 0755)
+	raw, _ := json.MarshalIndent(data, "", "  ")
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		log.Printf("[agent-run] Warning: failed to write Gemini clock hook: %v", err)
+		return
+	}
+	log.Printf("[agent-run] Gemini clock hook configured in %s", configPath)
 }
 
 func ensureClaudeTrust(cwd string) {

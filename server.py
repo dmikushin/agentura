@@ -1488,6 +1488,28 @@ async def handle_skill(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "name": name, "content": path.read_text()})
 
 
+async def handle_timezone(request: web.Request) -> web.Response:
+    """Return the server's timezone for agent clock synchronization."""
+    import subprocess
+    tz = os.environ.get("TZ", "")
+    if not tz:
+        try:
+            result = subprocess.run(["cat", "/etc/timezone"], capture_output=True, text=True, timeout=2)
+            tz = result.stdout.strip()
+        except Exception:
+            pass
+    if not tz:
+        try:
+            link = os.readlink("/etc/localtime")
+            # /etc/localtime -> /usr/share/zoneinfo/Europe/Zurich
+            tz = link.split("zoneinfo/", 1)[-1] if "zoneinfo/" in link else ""
+        except Exception:
+            pass
+    if not tz:
+        tz = "UTC"
+    return web.json_response({"status": "ok", "timezone": tz})
+
+
 # --- Main ---
 
 async def main():
@@ -1549,6 +1571,7 @@ async def main():
     app.router.add_post("/teams/broadcast", handle_team_broadcast)
     app.router.add_post("/teams/board", handle_board_post)
     app.router.add_get("/teams/board", handle_board_read)
+    app.router.add_get("/timezone", handle_timezone)
 
     runner = web.AppRunner(app)
     await runner.setup()

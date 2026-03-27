@@ -8,6 +8,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/agentura-run ./cmd/agentura-run
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/agentura-mcp ./cmd/agentura-mcp
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/agentura-mcp-backend ./cmd/agentura-mcp-backend
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/agentura-clock ./cmd/agentura-clock
 
 linux-amd64:
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/agentura-run-linux-amd64 ./cmd/agentura-run
