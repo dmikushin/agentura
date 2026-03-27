@@ -19,10 +19,22 @@ services:
       - DATABASE_URL=postgresql://agentura:${POSTGRES_PASSWORD:-agentura}@postgres:5432/agentura
       - DATABASE_BACKEND=postgres
       - EMBEDDING_PROVIDER=ollama
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_EMBED_MODEL=nomic-embed-text
     depends_on:
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_started
+
+  ollama:
+    image: ollama/ollama
+    container_name: agentura-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # Pull embedding model on first start
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 3 && ollama pull nomic-embed-text && wait"]
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -58,3 +70,4 @@ services:
 volumes:
   streams:
   pgdata:
+  ollama:
