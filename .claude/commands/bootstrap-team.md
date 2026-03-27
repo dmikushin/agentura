@@ -28,8 +28,12 @@ Send each agent their individual role via `send_message` with `rsvp: true`:
 - How their work connects to others
 - What they should do if they get stuck (ask the team, not suffer in silence — Edmondson's psychological safety)
 
-### Phase 5: Kick off
+### Phase 5: Start the sprint timer
 
-Use `broadcast_message` to signal the start: "Team is formed, roles assigned. Begin work. Post progress and blockers to the team board (`post_to_board`)."
+Call `start_sprint` with the team name and duration in minutes. This starts the clock for the entire team — every agent will see elapsed and remaining time after each tool call. Recommended: 30 minutes for a focused sprint.
+
+### Phase 6: Kick off
+
+Use `broadcast_message` to signal the start: "Team is formed, roles assigned. Sprint started (Xm). Post progress and blockers to the team board (`post_to_board`). Standup in 15 minutes."
 
 Post the team formation summary to the board via `post_to_board`.

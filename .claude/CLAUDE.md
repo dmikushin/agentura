@@ -15,6 +15,9 @@ Your identity is in the AGENT_ID environment variable.
 - **read_board** — read the team's shared board (decisions, status, context)
 - **create_agent** — spawn a new agent on local or remote host
 - **read_stream** — read another agent's terminal output
+- **restart_agent** — restart an agent preserving identity and session (or switch sessions)
+- **timenow** — check current time and sprint status
+- **start_sprint** — start a timed sprint for the team
 
 ### Social norms
 
@@ -23,6 +26,8 @@ Your identity is in the AGENT_ID environment variable.
 3. **Respond to /rsvp immediately** — when another agent sends you a message with rsvp, they are blocked waiting for your reply. Do not delay.
 4. **Report blockers** — if you are stuck, say so on the board or via broadcast. Asking for help is expected and encouraged.
 5. **Read the board** when you start working or rejoin — catch up on what happened while you were away.
+6. **You always know the time** — after every tool call, a clock hook prints `TIME NOW: HH:MMAM/PM (Xm since sprint start, Ym left)`. Use this to pace yourself. If the sprint is running out, wrap up and post results. Do not ignore time pressure.
+7. **Scrum Master can restart you** — if you are stuck and miss a standup, the Scrum Master may use `restart_agent` to bring you back. This is normal team management. After restart, read the latest message.
 
 ### Available skills (slash commands)
 

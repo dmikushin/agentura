@@ -2,6 +2,10 @@ You are running a team standup. Follow this protocol.
 
 **Theoretical basis**: Agile standup (Schwaber & Sutherland, Scrum Guide) — short daily synchronization reduces coordination waste. Hackman's "enabling conditions" (2002) — teams need a shared information environment. Toyota Production System transparency principle — problems must be visible to be solved. Edmondson's psychological safety — reporting blockers is a sign of strength, not weakness.
 
+## Time management
+
+Before starting the standup, call `timenow` to check current time and sprint status. Include the time in the standup announcement so team members know where they stand. If the sprint is past 50% with low progress, flag it as urgent.
+
 ## Protocol
 
 ### Step 1: Announce the standup
