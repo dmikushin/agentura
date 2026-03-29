@@ -336,22 +336,33 @@ func (s *Sidecar) checkRateLimit(content string) {
 	s.rateLimited = true
 	log.Printf("[sidecar] Rate limit detected for %s", s.agentID)
 
-	// Extract reset time if present (e.g., "resets 10am")
+	// Extract reset time from anywhere near the limit message.
+	// Claude format: "resets 10am (America/New_York)"
+	// Search the entire pane content, not just around the trigger line.
 	resetInfo := ""
-	if idx := strings.Index(lower, "resets"); idx >= 0 {
-		end := idx + 60
+	if idx := strings.Index(lower, "resets "); idx >= 0 {
+		end := idx + 80
 		if end > len(content) {
 			end = len(content)
 		}
-		// Find end of line
 		snippet := content[idx:end]
-		if nl := strings.IndexByte(snippet, '\n'); nl >= 0 {
-			snippet = snippet[:nl]
+		// Take until newline or closing paren or pipe
+		for i, ch := range snippet {
+			if ch == '\n' || ch == '│' || ch == '|' {
+				snippet = snippet[:i]
+				break
+			}
 		}
-		resetInfo = " (" + strings.TrimSpace(snippet) + ")"
+		snippet = strings.TrimSpace(snippet)
+		if snippet != "" {
+			resetInfo = " — " + snippet
+		}
 	}
 
-	msg := fmt.Sprintf("hit API rate limit%s — offline until reset", resetInfo)
+	msg := fmt.Sprintf("hit API rate limit%s", resetInfo)
+	if resetInfo == "" {
+		msg += " — offline until reset"
+	}
 
 	// Notify all team members via server
 	s.client.Post("/sidecar/rate-limited", map[string]interface{}{
