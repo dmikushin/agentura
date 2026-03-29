@@ -45,11 +45,23 @@ func main() {
 		fatal("AGENTURA_URL not set and no default compiled in")
 	}
 
-	// Cache directory
+	// Check for impl next to this binary (local install)
+	if self, err := os.Executable(); err == nil {
+		siblingImpl := filepath.Join(filepath.Dir(self), implName)
+		if _, err := os.Stat(siblingImpl); err == nil {
+			execImpl(siblingImpl)
+		}
+	}
+
+	// Check for impl in PATH
+	if pathImpl, err := exec.LookPath(implName); err == nil {
+		execImpl(pathImpl)
+	}
+
+	// Check project cache
 	cacheDir := filepath.Join(".", ".agentura", "bin")
 	implPath := filepath.Join(cacheDir, implName)
 
-	// If cached impl exists, exec it directly
 	if _, err := os.Stat(implPath); err == nil {
 		execImpl(implPath)
 	}
