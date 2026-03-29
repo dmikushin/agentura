@@ -12,6 +12,8 @@ services:
       - ${TMUX_SOCKET_PATH}:${TMUX_SOCKET_PATH}:ro  # host tmux socket
       - ./secrets/authorized_keys:/app/secrets/authorized_keys:ro
       - ./hosts.json:/data/hosts.json:ro
+      - ./bin/impl-linux-amd64:/app/bin/linux/amd64:ro
+      - ./bin/impl-linux-arm64:/app/bin/linux/arm64:ro
     environment:
       - TMUX_TMPDIR=/tmp
       - AUTHORIZED_KEYS=/app/secrets/authorized_keys

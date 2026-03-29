@@ -1480,7 +1480,7 @@ async def handle_bin_download(request: web.Request) -> web.Response:
     arch = request.match_info["arch"]
 
     bin_dir = Path("/app/bin")
-    path = bin_dir / name / goos / arch
+    path = bin_dir / goos / arch / name
     if not path.is_file() or not path.resolve().is_relative_to(bin_dir.resolve()):
         return web.json_response(
             {"status": "error", "error": f"binary '{name}/{goos}/{arch}' not found"}, status=404)
