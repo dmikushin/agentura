@@ -93,18 +93,33 @@ func main() {
 		fatal("AGENTURA_URL not set and no default compiled in\n  Set AGENTURA_URL in env, .env file, or build with: make build")
 	}
 
+	// --- Parse agentura-run flags ---
+	remaining := os.Args[1:]
+	for len(remaining) >= 2 {
+		if remaining[0] == "--team" {
+			os.Setenv("AGENTURA_TEAM", remaining[1])
+			remaining = remaining[2:]
+		} else {
+			break
+		}
+	}
+
+	if len(remaining) == 0 {
+		fatal("usage: agentura-run [--team NAME] {--claude | --gemini | <command> [args...]}")
+	}
+
 	// --- Resolve command ---
-	firstArg := os.Args[1]
+	firstArg := remaining[0]
 	var cmdName string
 	var args []string
 
 	if preset, ok := agentPresets[firstArg]; ok {
 		cmdName = preset.binary
 		args = append([]string{preset.binary}, preset.args...)
-		args = append(args, os.Args[2:]...) // extra flags
+		args = append(args, remaining[1:]...) // extra flags
 	} else {
 		cmdName = firstArg
-		args = os.Args[1:]
+		args = remaining
 	}
 
 	// --- Check TMUX_PANE ---
