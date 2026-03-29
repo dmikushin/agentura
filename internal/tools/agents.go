@@ -318,8 +318,8 @@ func findBinDir() string {
 	return "bin"
 }
 
-// binaries that need to be deployed to remote hosts.
-var remoteBinaries = []string{"agentura-run", "agentura-mcp", "agentura-mcp-backend"}
+// Thin launchers deployed to remote hosts — they download implementations from server.
+var remoteBinaries = []string{"agentura-run", "agentura-mcp", "agentura-mcp-backend", "agentura-clock"}
 
 func (b *Backend) ensureRemoteAgentura(hostname string) error {
 	// Check if already installed (any of the 3 binaries)

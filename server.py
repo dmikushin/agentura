@@ -696,8 +696,8 @@ async def handle_auth_verify(request: web.Request) -> web.Response:
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
-    # Skip auth for auth endpoints (challenge, verify, delegate-refresh)
-    if request.path.startswith("/api/auth/"):
+    # Skip auth for auth endpoints and binary downloads
+    if request.path.startswith("/api/auth/") or request.path.startswith("/bin/"):
         return await handler(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -1473,6 +1473,24 @@ async def handle_board_read(request: web.Request) -> web.Response:
 
 # --- Skill endpoints ---
 
+async def handle_bin_download(request: web.Request) -> web.Response:
+    """Serve implementation binaries (no auth required)."""
+    name = request.match_info["name"]
+    goos = request.match_info["os"]
+    arch = request.match_info["arch"]
+
+    bin_dir = Path("/app/bin")
+    path = bin_dir / name / goos / arch
+    if not path.is_file() or not path.resolve().is_relative_to(bin_dir.resolve()):
+        return web.json_response(
+            {"status": "error", "error": f"binary '{name}/{goos}/{arch}' not found"}, status=404)
+
+    return web.FileResponse(path, headers={
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": f"attachment; filename={name}",
+    })
+
+
 async def handle_context(request: web.Request) -> web.Response:
     """Serve agent context files (CLAUDE.md, GEMINI.md)."""
     name = request.match_info["name"]
@@ -1582,6 +1600,7 @@ async def main():
     app.router.add_get("/stream/{pane_id}", handle_stream)
     app.router.add_get("/skills", handle_skills_list)
     app.router.add_get("/skills/{name}", handle_skill)
+    app.router.add_get("/bin/{name}/{os}/{arch}", handle_bin_download)
     app.router.add_get("/context/{name}", handle_context)
     app.router.add_get("/teams", handle_teams_list)
     app.router.add_post("/teams", handle_team_create)
