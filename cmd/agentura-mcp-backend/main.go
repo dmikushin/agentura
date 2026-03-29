@@ -101,6 +101,7 @@ func dispatch(b *tools.Backend, tool string, args map[string]interface{}) string
 			getString("agent_type"),
 			getBool("blocking", true),
 			getString("team"),
+			getString("resume_session_id"),
 		)
 
 	// --- Messaging tools ---

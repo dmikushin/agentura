@@ -102,7 +102,7 @@ func (b *Backend) ReadStream(agentID string) string {
 }
 
 // CreateAgent creates a new AI agent in a tmux window (local or remote).
-func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, team string) string {
+func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, team, resumeSessionID string) string {
 	senderAgentID := b.agentID
 
 	if !b.agentPresets[agentType] {
@@ -115,7 +115,7 @@ func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, te
 
 	localHostname, _ := os.Hostname()
 	if hostname == localHostname {
-		return b.createLocalAgent(hostname, cwd, agentType, blocking, team, senderAgentID)
+		return b.createLocalAgent(hostname, cwd, agentType, blocking, team, senderAgentID, resumeSessionID)
 	}
 
 	hostRegistry := b.loadHostRegistry()
@@ -132,16 +132,20 @@ func (b *Backend) CreateAgent(hostname, cwd, agentType string, blocking bool, te
 			hostname, strings.Join(available, ", "))
 	}
 
-	return b.createRemoteAgent(hostname, cwd, agentType, blocking, team, senderAgentID)
+	return b.createRemoteAgent(hostname, cwd, agentType, blocking, team, senderAgentID, resumeSessionID)
 }
 
-func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
+func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID, resumeSessionID string) string {
 	teamEnv := ""
 	if team != "" {
 		teamEnv = fmt.Sprintf("AGENTURA_TEAM=%s ", shellQuote(team))
 	}
-	shellCmd := fmt.Sprintf("env %sAGENTURA_URL=%s agentura-run --%s",
-		teamEnv, shellQuote(b.monitorURL), agentType)
+	resumeArg := ""
+	if resumeSessionID != "" {
+		resumeArg = fmt.Sprintf(" --resume %s", shellQuote(resumeSessionID))
+	}
+	shellCmd := fmt.Sprintf("env %sAGENTURA_URL=%s agentura-run --%s%s",
+		teamEnv, shellQuote(b.monitorURL), agentType, resumeArg)
 
 	// If team is specified, create/reuse a tmux session named after the team
 	tmuxArgs := []string{"new-window", "-c", cwd, "-P", "-F", "#{pane_id}", "-n", agentType}
@@ -176,7 +180,7 @@ func (b *Backend) createLocalAgent(hostname, cwd, agentType string, blocking boo
 	return b.formatCreatedAgent(newAgentID, teamMsg, paneID, agentType, blocking, "")
 }
 
-func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID string) string {
+func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bool, team, senderAgentID, resumeSessionID string) string {
 	// Step 0: Deploy Go binaries to remote host
 	if err := b.ensureRemoteAgentura(hostname); err != nil {
 		return fmt.Sprintf("Error: remote setup failed (%s): %v", hostname, err)
@@ -206,8 +210,12 @@ func (b *Backend) createRemoteAgent(hostname, cwd, agentType string, blocking bo
 
 	// Step 2: SSH to remote host and launch agent
 	// AGENTURA_URL passed as env for compatibility; compiled-in default also works
-	windowCmd := fmt.Sprintf("env AGENTURA_URL=%s AGENTURA_TOKEN=%s agentura-run --%s",
-		shellQuote(b.monitorURL), shellQuote(delegationToken), agentType)
+	resumeArg := ""
+	if resumeSessionID != "" {
+		resumeArg = fmt.Sprintf(" --resume %s", shellQuote(resumeSessionID))
+	}
+	windowCmd := fmt.Sprintf("env AGENTURA_URL=%s AGENTURA_TOKEN=%s agentura-run --%s%s",
+		shellQuote(b.monitorURL), shellQuote(delegationToken), agentType, resumeArg)
 	remoteCmd := fmt.Sprintf("tmux new-window -c %s -P -F '#{pane_id}' -n %s %s",
 		shellQuote(cwd), shellQuote(agentType), shellQuote(windowCmd))
 

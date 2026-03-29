@@ -142,7 +142,15 @@ func registerTools(s *server.MCPServer) {
 
 	s.AddTool(
 		mcp.NewTool("create_agent",
-			mcp.WithDescription("Create a new AI agent on a local or remote host.\n\nFor remote hosts, the agent is launched via SSH. A sidecar process\nhandles monitoring and message delivery.\nYour identity is taken automatically from AGENT_ID (set by agent-run)."),
+			mcp.WithDescription("Create a new AI agent on a local or remote host.\n\n"+
+				"For remote hosts, the agent is launched via SSH. A sidecar process\n"+
+				"handles monitoring and message delivery.\n\n"+
+				"**Resume a saved session:** provide resume_session_id to continue\n"+
+				"a previous conversation. The agent starts with full context from\n"+
+				"the saved session instead of a blank slate. Useful for:\n"+
+				"- Recovering a crashed agent's work\n"+
+				"- Continuing a long task after rate limit reset\n"+
+				"- Spawning a new agent that picks up where another left off"),
 			mcp.WithString("hostname",
 				mcp.Required(),
 				mcp.Description("target host (local hostname or a remote host from list_hosts)"),
@@ -162,6 +170,9 @@ func registerTools(s *server.MCPServer) {
 			),
 			mcp.WithString("team",
 				mcp.Description("team name to assign the new agent to (optional)"),
+			),
+			mcp.WithString("resume_session_id",
+				mcp.Description("session UUID to resume (agent starts with saved conversation context instead of blank)"),
 			),
 		),
 		makeHandler("create_agent"),
