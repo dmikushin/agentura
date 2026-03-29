@@ -372,6 +372,74 @@ func (s *Sidecar) checkRateLimit(content string) {
 
 	// Push to stream so it's visible in read_stream
 	s.pushStream(fmt.Sprintf("\n---\n*Agent %s (%s) %s*\n", s.agentID, s.cmdName, msg))
+
+	// Schedule auto-restart when rate limit resets
+	if wait := s.parseResetWait(content); wait > 0 {
+		log.Printf("[sidecar] Will auto-restart %s in %s when rate limit resets", s.agentID, wait)
+		go func() {
+			time.Sleep(wait + 30*time.Second) // 30s buffer after reset
+			log.Printf("[sidecar] Rate limit reset — restarting %s", s.agentID)
+			s.rateLimited = false
+			s.doRestart("")
+		}()
+	}
+}
+
+// parseResetWait extracts the reset time from pane content and returns
+// how long to wait. Parses patterns like "resets 10am (America/New_York)"
+// or "resets 2pm". Returns 0 if unable to parse.
+func (s *Sidecar) parseResetWait(content string) time.Duration {
+	lower := strings.ToLower(content)
+	idx := strings.Index(lower, "resets ")
+	if idx < 0 {
+		return 0
+	}
+
+	// Extract "10am" or "2pm" or "10:30am" after "resets "
+	after := lower[idx+7:]
+	// Match time pattern: digits + optional :digits + am/pm
+	re := regexp.MustCompile(`^(\d{1,2})(?::(\d{2}))?\s*(am|pm)`)
+	m := re.FindStringSubmatch(after)
+	if m == nil {
+		return 0
+	}
+
+	hour := 0
+	fmt.Sscanf(m[1], "%d", &hour)
+	minute := 0
+	if m[2] != "" {
+		fmt.Sscanf(m[2], "%d", &minute)
+	}
+	if m[3] == "pm" && hour < 12 {
+		hour += 12
+	}
+	if m[3] == "am" && hour == 12 {
+		hour = 0
+	}
+
+	// Extract timezone if present: "(America/New_York)"
+	loc := time.UTC
+	if tzIdx := strings.Index(after, "("); tzIdx >= 0 {
+		if tzEnd := strings.Index(after[tzIdx:], ")"); tzEnd >= 0 {
+			tzName := strings.TrimSpace(after[tzIdx+1 : tzIdx+tzEnd])
+			if parsed, err := time.LoadLocation(tzName); err == nil {
+				loc = parsed
+			}
+		}
+	}
+
+	now := time.Now().In(loc)
+	resetTime := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, loc)
+	// If reset time is in the past, it's tomorrow
+	if resetTime.Before(now) {
+		resetTime = resetTime.Add(24 * time.Hour)
+	}
+
+	wait := resetTime.Sub(now)
+	if wait > 24*time.Hour {
+		return 0 // sanity check
+	}
+	return wait
 }
 
 func (s *Sidecar) pushStream(content string) {
