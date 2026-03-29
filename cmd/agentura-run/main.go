@@ -555,7 +555,7 @@ func ensureClaudeClockHook(cwd string) {
 
 	// Check if hook already exists
 	if hooks, ok := data["hooks"].(map[string]interface{}); ok {
-		if _, ok := hooks["postToolExecution"]; ok {
+		if _, ok := hooks["PostToolUse"]; ok {
 			return // already configured
 		}
 	}
@@ -566,10 +566,16 @@ func ensureClaudeClockHook(cwd string) {
 		data["hooks"] = hooks
 	}
 
-	hooks["postToolExecution"] = []interface{}{
+	hooks["PostToolUse"] = []interface{}{
 		map[string]interface{}{
-			"command": "agentura-clock",
-			"timeout": 2000,
+			"matcher": "*",
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": "agentura-clock",
+					"timeout": 2000,
+				},
+			},
 		},
 	}
 
