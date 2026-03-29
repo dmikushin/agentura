@@ -1275,6 +1275,38 @@ async def handle_sidecar_update_pid(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_sidecar_rate_limited(request: web.Request) -> web.Response:
+    """Agent reports rate limit — notify all team members."""
+    registry: AgentRegistry = request.app["registry"]
+    try:
+        body = await request.json()
+        agent_id = body["agent_id"]
+        message = body.get("message", "hit API rate limit")
+    except (KeyError, json.JSONDecodeError) as e:
+        return web.json_response({"status": "error", "error": str(e)}, status=400)
+
+    entry = registry.agents.get(agent_id)
+    if not entry:
+        return web.json_response(
+            {"status": "error", "error": f"agent '{agent_id}' not found"}, status=404)
+
+    print(f"[agentura] Agent '{entry.name}' rate limited: {message}")
+
+    # Notify all team members
+    for team_name in entry.teams:
+        for other in registry.agents.values():
+            if other.agent_id == agent_id:
+                continue
+            if team_name in other.teams:
+                other.message_queue.append({
+                    "text": f"Agentura notification: Agent {agent_id} ({entry.name}) {message}. Reassign their tasks if needed.",
+                    "sender": "agentura",
+                    "timestamp": _now(),
+                })
+
+    return web.json_response({"status": "ok"})
+
+
 async def handle_sidecar_heartbeat(request: web.Request) -> web.Response:
     """Heartbeat from sidecar."""
     registry: AgentRegistry = request.app["registry"]
@@ -1618,6 +1650,7 @@ async def main():
     # Sidecar endpoints (all agents)
     app.router.add_post("/sidecar/register", handle_sidecar_register)
     app.router.add_post("/sidecar/stream-push", handle_sidecar_stream_push)
+    app.router.add_post("/sidecar/rate-limited", handle_sidecar_rate_limited)
     app.router.add_post("/sidecar/restart", handle_sidecar_restart)
     app.router.add_post("/sidecar/update-pid", handle_sidecar_update_pid)
     app.router.add_post("/sidecar/heartbeat", handle_sidecar_heartbeat)

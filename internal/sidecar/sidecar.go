@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ type Sidecar struct {
 	cmdName string
 
 	restarting       bool
+	rateLimited      bool // already notified about rate limit
 	prevHashes       map[string]bool
 	hashHistory      []string
 	lastTokenRefresh time.Time
@@ -107,6 +109,9 @@ func (s *Sidecar) Run() {
 		// Capture and push stream content
 		content, err := tmux.CapturePane(s.paneID, 200)
 		if err == nil && content != "" {
+			// Detect rate limit / quota exhaustion
+			s.checkRateLimit(content)
+
 			if newContent := s.dedup(content); newContent != "" {
 				cleaned := tmux.TUIToMd(newContent)
 				if cleaned != "" {
@@ -312,6 +317,50 @@ func (s *Sidecar) captureResumeID() string {
 		return matches[len(matches)-1]
 	}
 	return ""
+}
+
+// checkRateLimit detects API rate limit messages in the pane and notifies the team.
+// Patterns: "hit your limit", "rate limit", "resets at", "quota exceeded"
+func (s *Sidecar) checkRateLimit(content string) {
+	if s.rateLimited {
+		return // already notified
+	}
+
+	lower := strings.ToLower(content)
+	if !strings.Contains(lower, "hit your limit") &&
+		!strings.Contains(lower, "rate limit") &&
+		!strings.Contains(lower, "quota exceeded") {
+		return
+	}
+
+	s.rateLimited = true
+	log.Printf("[sidecar] Rate limit detected for %s", s.agentID)
+
+	// Extract reset time if present (e.g., "resets 10am")
+	resetInfo := ""
+	if idx := strings.Index(lower, "resets"); idx >= 0 {
+		end := idx + 60
+		if end > len(content) {
+			end = len(content)
+		}
+		// Find end of line
+		snippet := content[idx:end]
+		if nl := strings.IndexByte(snippet, '\n'); nl >= 0 {
+			snippet = snippet[:nl]
+		}
+		resetInfo = " (" + strings.TrimSpace(snippet) + ")"
+	}
+
+	msg := fmt.Sprintf("hit API rate limit%s — offline until reset", resetInfo)
+
+	// Notify all team members via server
+	s.client.Post("/sidecar/rate-limited", map[string]interface{}{
+		"agent_id": s.agentID,
+		"message":  msg,
+	})
+
+	// Push to stream so it's visible in read_stream
+	s.pushStream(fmt.Sprintf("\n---\n*Agent %s (%s) %s*\n", s.agentID, s.cmdName, msg))
 }
 
 func (s *Sidecar) pushStream(content string) {
