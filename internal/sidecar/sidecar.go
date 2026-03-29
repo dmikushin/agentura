@@ -39,6 +39,7 @@ type Sidecar struct {
 
 	restarting       bool
 	rateLimited      bool // already notified about rate limit
+	rateLimitRetries int  // how many times we've retried after rate limit
 	prevHashes       map[string]bool
 	hashHistory      []string
 	lastTokenRefresh time.Time
@@ -373,12 +374,20 @@ func (s *Sidecar) checkRateLimit(content string) {
 	// Push to stream so it's visible in read_stream
 	s.pushStream(fmt.Sprintf("\n---\n*Agent %s (%s) %s*\n", s.agentID, s.cmdName, msg))
 
-	// Schedule auto-restart when rate limit resets
+	// Schedule auto-restart when rate limit resets (max 3 retries)
+	if s.rateLimitRetries >= 3 {
+		log.Printf("[sidecar] Rate limit retry limit reached (%d) for %s — giving up auto-restart", s.rateLimitRetries, s.agentID)
+		return
+	}
 	if wait := s.parseResetWait(content); wait > 0 {
-		log.Printf("[sidecar] Will auto-restart %s in %s when rate limit resets", s.agentID, wait)
+		s.rateLimitRetries++
+		// Add exponential backoff on top of wait: +30s, +90s, +270s
+		backoff := time.Duration(30*s.rateLimitRetries*s.rateLimitRetries) * time.Second
+		totalWait := wait + backoff
+		log.Printf("[sidecar] Will auto-restart %s in %s (retry %d/3, backoff %s)", s.agentID, totalWait, s.rateLimitRetries, backoff)
 		go func() {
-			time.Sleep(wait + 30*time.Second) // 30s buffer after reset
-			log.Printf("[sidecar] Rate limit reset — restarting %s", s.agentID)
+			time.Sleep(totalWait)
+			log.Printf("[sidecar] Rate limit reset — restarting %s (retry %d)", s.agentID, s.rateLimitRetries)
 			s.rateLimited = false
 			s.doRestart("")
 		}()
